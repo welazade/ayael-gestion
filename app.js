@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '7';
+  const DEMO_SCHEMA_VERSION = '8';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -507,9 +507,10 @@
   // Menu latéral (ordinateur)
   function navItems() {
     if (isG()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
-      ['rapports', 'Rapports', 'chart'], 'Réglages', ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'], ['equipe', 'Équipe', 'user'], ['comptes', 'Comptes et commissions', 'bank'],
+      ['commissions', 'Commissions à vérifier', 'card'], ['rapports', 'Rapports', 'chart'], 'Réglages', ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'], ['equipe', 'Équipe', 'user'], ['comptes', 'Comptes et commissions', 'bank'],
       ['produits', 'Produits de caisse', 'tag'], ['import', 'Importer depuis Excel', 'upload'], ['plus', 'Autres réglages', 'grid']];
-    return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['cloture', 'Clôture du soir', 'lock']];
+    return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'],
+      ...(S.me.can_recharge ? [['commissions', 'Commissions à vérifier', 'card']] : []), ['cloture', 'Clôture du soir', 'lock']];
   }
   const firstView = () => isG() ? 'tableau' : 'accueil';
 
@@ -662,6 +663,7 @@
           <div class="hero"><div class="label">Ma caisse (espèces)</div><div class="big num">${fmt(mine.balance)}</div>
             <div class="sub">${d.today.ops_n} opération(s) aujourd’hui${d.pending_closings ? ' · clôture en attente de validation' : ''}</div></div>
           <button class="hero-cta only-mobile" data-do="vente">${icon('plus')}Nouvelle opération</button>
+          ${d.commissions_to_check ? `<div class="alert warn"><span>${d.commissions_to_check} commission(s) de recharge à vérifier sur le rapport du GTP. <a href="#/commissions">Vérifier</a></span></div>` : ''}
           <div class="actions">
             <button class="action" data-do="depense">${icon('out')}Dépense</button>
             <a class="action" href="#/clients">${icon('users')}Clients</a>
@@ -1225,7 +1227,8 @@
       ['Compte', o.account], o.account2 && [label2, o.kind === 'recharge' && o.account_kind !== 'caisse' && /^Caisse/.test(o.account2) ? 'Espèces' : o.account2],
       ['Montant', fmt(o.kind === 'ajustement' ? o.amount : o.amount)],
       o.received != null && ['Reçu du client', fmt(o.received)], o.change_given != null && ['Monnaie rendue', fmt(o.change_given)],
-      o.kind === 'recharge' && ['Commission', fmt(o.commission) + (o.commission_auto != null && Number(o.commission_auto) !== Number(o.commission) ? ` (auto : ${fmt(o.commission_auto)})` : '')],
+      o.kind === 'recharge' && ['Commission', fmt(o.commission) + (o.commission_status === 'verifiee' ? ' (vérifiée)' : ' (estimée, à vérifier)')
+        + (o.commission_before != null && Number(o.commission_before) !== Number(o.commission) ? ` · avant correction : ${fmt(o.commission_before)}` : '')],
       o.category && ['Catégorie', o.category], o.details && ['Détails', o.details], o.flags && ['Signalement', o.flags],
       o.status !== 'ok' && ['Annulée', `${fmtDT(o.cancelled_at)} par ${o.cancelled_by_name || '?'}`], o.cancel_reason && ['Motif', o.cancel_reason],
       ['N°', '#' + o.id],
@@ -1235,8 +1238,11 @@
       body: `<dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v ?? '')}</dd>`).join('')}</dl>
         ${o.status === 'ok' && !canCancel && !isG() ? '<p class="small muted" style="margin-top:16px">Pour annuler cette opération, demandez à la gérante.</p>' : ''}`,
       foot: (canCancel ? '<button class="btn danger" data-x="cancel">Annuler l’opération</button>' : '') +
-        (o.receipt_id ? `<button class="btn" data-x="rec">${icon('receipt')} Voir le reçu N° ${pad(o.receipt_id)}</button>` : ''),
+        (o.receipt_id ? `<button class="btn" data-x="rec">${icon('receipt')} Voir le reçu N° ${pad(o.receipt_id)}</button>` : '') +
+        (canVerify(o) ? '<button class="btn" data-x="com">Vérifier la commission</button>' : ''),
       onMount(c) {
+        const cb = c.q('[data-x=com]');
+        if (cb) cb.onclick = () => { c.close(); sheetVerifyCommission(o); };
         const rb = c.q('[data-x=rec]');
         if (rb) rb.onclick = () => { c.close(); sheetReceipt(o.receipt_id); };
         const b = c.q('[data-x=cancel]');
@@ -1247,6 +1253,94 @@
         };
       },
     });
+  }
+
+  // ---------------------------------------------------------------- commissions à vérifier
+  const canVerify = o => o.kind === 'recharge' && o.status === 'ok' && (isG() || (S.me.can_recharge && o.user_id === S.me.id));
+
+  function sheetVerifyCommission(o) {
+    sheet({
+      title: 'Vérifier la commission',
+      body: `<div class="calc"><div style="font-weight:700">${esc(o.client_name || o.holder_name || '')}</div>
+          <div class="small muted">Carte ${esc(o.card_number || '')} · ${esc(o.account || '')} · ${fmtDT(o.created_at)} · montant ${fmt(o.amount)}</div></div>
+        ${field('Commission reversée (lue sur le rapport du GTP)', moneyInput('com', `autofocus value="${fmtN(o.commission)}"`),
+          `Commission enregistrée : ${fmt(o.commission)}${o.commission_status === 'verifiee' ? ' (déjà vérifiée)' : ' (estimée)'}. Si vous changez le montant, le solde GTP est corrigé de la différence.`)}`,
+      foot: '<button class="btn primary" data-x="ok">Confirmer</button>',
+      onMount(c) {
+        const go = () => busy(c.q('[data-x=ok]'), async () => {
+          const v = parseAmt(c.q('[name=com]').value);
+          if (v == null || v < 0) throw new Error('Indiquez la commission.');
+          const r = await rpc('verify_commission', { id: o.id, commission: v });
+          c.close();
+          toast(r.diff ? `Commission corrigée (${fmtSigned(r.diff)}). Solde GTP : ${fmt(r.balance)}` : 'Commission confirmée.', 'ok');
+          refreshNow();
+        });
+        c.q('[data-x=ok]').onclick = go;
+        c.onKey = e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); go(); } };
+      },
+    });
+  }
+
+  async function vCommissions(m) {
+    const f = S.cm || (S.cm = { period: 'today', from: null, to: null, account: '', status: 'estimee' });
+    const gtps = S.accounts.filter(a => a.kind === 'gtp');
+    m.innerHTML = `
+      <div class="alert info"><span>À la saisie, la commission est <b>estimée</b>. Ouvrez le rapport du GTP, puis pour chaque recharge tapez la <b>commission reversée</b> et touchez ✓. Si le montant change, le solde GTP est corrigé automatiquement.</span></div>
+      <div class="chips">${PERIODS.filter(p => p[0] !== 'year').map(([k, l]) => `<button class="chip ${f.period === k ? 'on' : ''}" data-p="${k}">${l}</button>`).join('')}</div>
+      <div class="filters ${f.period === 'custom' ? '' : 'hidden'}" id="cmdates">
+        <input class="input" type="date" id="cmfrom" value="${esc(f.from || todayIso())}" aria-label="Du"><input class="input" type="date" id="cmto" value="${esc(f.to || todayIso())}" aria-label="Au"></div>
+      <div class="filters">
+        <select class="input" id="cmacc" aria-label="Compte GTP">${options(gtps.map(a => [a.id, a.name]), f.account, 'Tous les comptes GTP')}</select>
+        <select class="input" id="cmst" aria-label="État">${options([['estimee', 'À vérifier'], ['verifiee', 'Déjà vérifiées'], ['', 'Toutes']], f.status)}</select>
+      </div>
+      <div id="cmres"><div class="spinner"></div></div>`;
+    m.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { f.period = b.dataset.p; route(); });
+    const on = (id, k) => { const el = m.querySelector(id); el.onchange = () => { f[k] = el.value; load(); }; };
+    on('#cmfrom', 'from'); on('#cmto', 'to'); on('#cmacc', 'account'); on('#cmst', 'status');
+    const load = async () => {
+      const [from, to] = f.period === 'custom' ? [f.from || todayIso(), f.to || f.from || todayIso()] : period(f.period);
+      const list = (await rpc('list_operations', { from, to, kind: 'recharge', account_id: f.account || null,
+        commission_status: f.status || null, include_cancelled: false, limit: 2000 })).reverse();   // dans l'ordre du rapport GTP
+      const box = m.querySelector('#cmres'); if (!box) return;
+      list.forEach(o => S.ops.set(o.id, o));
+      const mine = list.filter(canVerify);
+      const tot = list.reduce((s, o) => s + Number(o.commission), 0);
+      box.innerHTML = list.length ? `
+        <p class="small muted" style="margin:0 4px 8px">${list.length} recharge(s) · commissions ${fmt(tot)}</p>
+        <div class="dtable scrollx"><table><thead><tr><th>${new Set(list.map(o => o.op_day)).size > 1 ? 'Date' : 'Heure'}</th><th>Client · carte</th><th>Compte</th><th class="r">Montant</th><th class="r">Commission reversée</th><th></th></tr></thead><tbody>
+          ${list.map(o => `<tr style="cursor:default" data-row="${o.id}">
+            <td class="num">${new Set(list.map(x => x.op_day)).size > 1 ? fmtDate(o.op_day) + ' ' : ''}${fmtTime(o.created_at)}</td>
+            <td><div style="font-weight:600">${esc(o.client_name || o.holder_name || '')}</div><div class="sub">${esc(o.card_number || '')}${isG() && o.agent ? ' · ' + esc(o.agent) : ''}</div></td>
+            <td class="sub">${esc(o.account || '')}</td>
+            <td class="r num">${fmtN(o.amount)}</td>
+            <td class="r">${canVerify(o) ? `<input class="input money" data-com="${o.id}" inputmode="numeric" value="${fmtN(o.commission)}" style="width:110px;min-height:40px;font-size:16px;text-align:right;padding:6px 10px">` : `<span class="num">${fmtN(o.commission)}</span>`}</td>
+            <td>${o.commission_status === 'verifiee' ? '<span class="tag green">vérifiée</span>' : canVerify(o) ? `<button class="btn small primary" data-ok="${o.id}" title="Confirmer">✓</button>` : '<span class="tag amber">à vérifier</span>'}</td></tr>`).join('')}
+        </tbody></table></div>
+        ${mine.some(o => o.commission_status !== 'verifiee') ? `<button class="btn primary block" id="cmall" style="margin-top:12px">Confirmer toutes les lignes affichées (${mine.filter(o => o.commission_status !== 'verifiee').length})</button>
+          <p class="small muted">Vérifiez d’abord chaque montant avec le rapport du GTP : « Confirmer tout » enregistre les montants tels qu’ils sont affichés.</p>` : ''}`
+        : `<div class="list"><div class="empty">${f.status === 'estimee' ? 'Aucune commission à vérifier sur cette période. 👍' : 'Aucune recharge sur cette période.'}</div></div>`;
+      bindMoney(box);
+      const verify = async id => {
+        const v = parseAmt(box.querySelector(`[data-com="${id}"]`).value);
+        if (v == null || v < 0) throw new Error('Commission invalide.');
+        return rpc('verify_commission', { id, commission: v });
+      };
+      box.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => busy(b, async () => {
+        const r = await verify(Number(b.dataset.ok));
+        toast(r.diff ? `Corrigée (${fmtSigned(r.diff)}).` : 'Confirmée.', 'ok'); load();
+      }));
+      box.querySelectorAll('[data-com]').forEach(i => i.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); const b = box.querySelector(`[data-ok="${i.dataset.com}"]`); if (b) b.click(); }
+      }));
+      const all = box.querySelector('#cmall');
+      if (all) all.onclick = () => busy(all, async () => {
+        const todo = mine.filter(o => o.commission_status !== 'verifiee');
+        let n = 0, diff = 0;
+        for (const o of todo) { const r = await verify(o.id); n++; diff += Number(r.diff) || 0; all.textContent = `Confirmation… ${n} / ${todo.length}`; }
+        toast(`${n} commission(s) confirmée(s)${diff ? `, écart total ${fmtSigned(diff)}` : ''}.`, 'ok'); load();
+      });
+    };
+    await load();
   }
 
   // ---------------------------------------------------------------- clôture (agent)
@@ -1317,6 +1411,7 @@
     B.filter(b => b.balance < 0).forEach(b => alerts.push(`<div class="alert bad"><span><b>${esc(b.name)}</b> est négatif : ${fmt(b.balance)}.</span></div>`));
     B.filter(b => b.balance >= 0 && Number(b.low_alert) > 0 && b.balance < b.low_alert).forEach(b => alerts.push(`<div class="alert warn"><span><b>${esc(b.name)}</b> est bas : ${fmt(b.balance)} (seuil ${fmt(b.low_alert)}).</span></div>`));
     if (d.pending_closings) alerts.push(`<div class="alert info"><span>${d.pending_closings} clôture(s) à valider. <a href="#/clotures">Voir</a></span></div>`);
+    if (d.commissions_to_check) alerts.push(`<div class="alert warn"><span>${d.commissions_to_check} commission(s) de recharge à vérifier sur le rapport du GTP. <a href="#/commissions">Vérifier</a></span></div>`);
     const sum = l => l.reduce((s, b) => s + Number(b.balance), 0);
     m.innerHTML = `
       ${alerts.join('')}
@@ -1476,6 +1571,7 @@
       ${section('Suivi', `<div class="list">
         ${item('#/clients', 'users', 'Clients', 'Fiches clients, cartes, historique')}
         ${item('#/doublons', 'users', 'Clients en double', 'Repérer et fusionner les fiches d’une même personne')}
+        ${item('#/commissions', 'card', 'Commissions à vérifier', 'Pointer les commissions avec le rapport du GTP')}
         ${item('#/rapports', 'chart', 'Rapports', 'Par produit, par GTP, par agent, commissions par mois')}
         ${item('#/cartes', 'card', 'Cartes clients', 'Rechercher, corriger, ajouter')}
         <button class="row" data-do="export"><div class="ico neu">${icon('download')}</div><div class="main"><div class="t">Exporter en Excel</div><div class="s">Sauvegarde de toutes les opérations d’une période</div></div>${icon('chev')}</button>
@@ -1510,7 +1606,7 @@
         r.by_gtp.map(x => [esc(x.name), x.n, fmtN(x.amount), fmtN(x.commission), fmtN(x.appro)]),
         ['Total', s(r.by_gtp, 'n'), fmtN(s(r.by_gtp, 'amount')), fmtN(s(r.by_gtp, 'commission')), fmtN(s(r.by_gtp, 'appro'))]))}
       ${section('Commissions par mois', tbl(['Mois', 'Compte', 'Nb', 'Rechargé', 'Commission'],
-        r.by_month.map(x => [monthName(x.month), esc(x.name), x.n, fmtN(x.amount), fmtN(x.commission)]),
+        r.by_month.map(x => [monthName(x.month), esc(x.name), x.n, fmtN(x.amount), fmtN(x.commission) + (Number(x.to_check) ? ` <span class="tag amber">${x.to_check} à vérifier</span>` : '')]),
         ['Total', '', s(r.by_month, 'n'), fmtN(s(r.by_month, 'amount')), fmtN(s(r.by_month, 'commission'))]))}
       ${section('Caisse par produit', tbl(['Produit', 'Nb', 'Montant'],
         r.by_product.map(x => [`${esc(x.name)} <span class="tag ${x.direction === 'entree' ? 'green' : 'red'}">${x.direction === 'entree' ? 'Entrée' : 'Sortie'}</span>`, x.n, fmtN(x.total)])))}
@@ -2096,6 +2192,7 @@
     rapports: { title: 'Rapports', render: vRapports, gerante: true },
     cartes: { title: 'Cartes clients', render: vCartes, gerante: true },
     doublons: { title: 'Clients en double', render: vDoublons, gerante: true },
+    commissions: { title: 'Commissions à vérifier', render: vCommissions, need: 'can_recharge' },
     equipe: { title: 'Équipe', render: vEquipe, live: true, gerante: true },
     comptes: { title: 'Comptes et commissions', render: vComptes, gerante: true },
     produits: { title: 'Produits de caisse', render: vProduits, gerante: true },
