@@ -263,7 +263,10 @@
   }
   const loginToEmail = l => { const v = String(l || '').trim().toLowerCase(); return v.includes('@') ? v : `${v.replace(/\s+/g, '.')}@${LOGIN_DOMAIN}`; };
 
+  // « ?demo » dans l'adresse : version d'essai, sans toucher à la base de l'équipe.
+  const FORCE_DEMO = new URLSearchParams(location.search).has('demo');
   function getConfig() {
+    if (FORCE_DEMO) return null;
     const c = window.AYAEL_CONFIG || {};
     if (c.supabaseUrl && c.supabaseAnonKey) return { url: c.supabaseUrl, key: c.supabaseAnonKey, fromFile: true };
     try { const s = JSON.parse(store('cfg') || 'null'); if (s && s.url && s.key) return s; } catch (e) { /* rien */ }
@@ -362,7 +365,7 @@
     try {
       const cfg = getConfig();
       if (cfg) S.api = makeSupabase(cfg);
-      else if (store('mode') === 'demo') { splash('Préparation du mode démo…'); S.api = await makeDemo(); }
+      else if (FORCE_DEMO || store('mode') === 'demo') { splash('Préparation du mode démo…'); S.api = await makeDemo(); }
       else return showSetup();
       await startSession();
     } catch (e) {
@@ -371,7 +374,7 @@
         <button class="btn block" onclick="location.reload()">Réessayer</button>
         ${store('mode') === 'demo' ? '<button class="btn ghost block" id="quitdemo">Quitter le mode démo</button>' : ''}</div>`;
       const q = document.getElementById('quitdemo');
-      if (q) q.onclick = () => { store('mode', null); location.reload(); };
+      if (q) q.onclick = () => { store('mode', null); location.href = location.pathname; };
     }
   }
 
@@ -446,7 +449,7 @@
         if (!n) return;
         const id = await S.api.signUpDemo(n); await S.api.signInAs(id); startSession();
       };
-      document.getElementById('quit').onclick = () => { store('mode', null); location.reload(); };
+      document.getElementById('quit').onclick = () => { store('mode', null); location.href = location.pathname; };
       return;
     }
     let signup = false;
@@ -1758,11 +1761,59 @@
   const CARD_RE = /^\s*(?:RECHARGEMENT\s+[A-Z]+\s+)?(\d{6,9})\s*(?:\(\s*(\d{3,5})\s*\))?\s*-?\s*([A-Za-zÀ-ÿ'’][A-Za-zÀ-ÿ'’ .\-]{2,}?)\s*$/;
   function guessBank(sheetName, fileBank) {
     const n = norm(sheetName);
-    if (n.includes('ECOBANK')) return 'ECOBANK';
-    if (n.includes('GTCO') || n.includes('AYAEL CI')) return 'GTCO';
+    if (n.includes('ECOBANK') || n.includes('CASHXPRESS') || n.includes('CASH XPRESS')) return 'ECOBANK';
+    if (n.includes('GTCO') || n.includes('GTBANK') || n.includes('AYAEL CI')) return 'GTCO';
+    if (n.includes('UBA BURKINA') || n.includes('UBA BF')) return 'UBA BF';
     if (n.includes('UBA') || n.includes('AFRICSIKA')) return 'UBA';
     if (n.includes('BNIFIC')) return 'BNIFIC';
+    if (n.includes('BSIC')) return 'BSIC';
+    if (/\bBNI\b/.test(n)) return 'BNI';
     return fileBank;
+  }
+
+  // Fiche clients en colonnes (N° Identifiant, Noms & prénoms, Téléphone, Statut, Date d'expiration…)
+  function parseClientSheet(rows, bank) {
+    const h = rows.slice(0, 3).findIndex(r => (r || []).some(v => /IDENTIFIANT/.test(norm(v))) && (r || []).some(v => /^NOMS?\b/.test(norm(v).trim())));
+    if (h < 0) return null;
+    const head = rows[h].map(v => norm(v).trim());
+    const col = re => head.findIndex(v => re.test(v));
+    const cId = col(/IDENTIFIANT/), cName = col(/^NOMS?\b/), cPhone = col(/TELEPHONE/), cStatus = col(/STATUT/), cBuy = col(/ACHAT/);
+    const cExp = head.map((v, i) => /EXPIRATION/.test(v) ? i : -1).filter(i => i >= 0);
+    const today = todayIso();
+    const toDate = v => {
+      if (typeof v === 'number') return excelDate(v);
+      const s = String(v || '').trim();
+      let m = s.match(/^(\d{1,2})\s*\/\s*(\d{2})$/);          // 11/26 = fin novembre 2026
+      if (m) return isoDay(new Date(2000 + Number(m[2]), Number(m[1]), 0));
+      return excelDate(s);
+    };
+    const out = [];
+    for (let i = h + 1; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const rawId = r[cId], rawName = r[cName];
+      if (rawId == null || rawName == null) continue;
+      let num = null, last4 = null;
+      if (typeof rawId === 'number') num = String(Math.round(rawId));
+      else { const m = String(rawId).match(/(\d{5,12})\s*(?:\(\s*(\d{3,5})\s*\))?/); if (m) { num = m[1]; last4 = m[2] || null; } }
+      const name = String(rawName).replace(/\s+/g, ' ').trim().toUpperCase();
+      if (!num || name.length < 2 || /IDENTIFIANT|NOMS/.test(norm(name))) continue;
+      let phone = null;
+      if (cPhone >= 0 && r[cPhone] != null) {
+        let d = typeof r[cPhone] === 'number' ? String(Math.round(r[cPhone])) : String(r[cPhone]).replace(/\D/g, '');
+        if (d.length === 11 && d.startsWith('228')) d = d.slice(3);
+        phone = d.length === 8 ? d.replace(/(\d{2})(?=\d)/g, '$1 ') : (d || null);
+      }
+      const rawStatus = cStatus >= 0 ? r[cStatus] : null;
+      const status = typeof rawStatus === 'string' ? norm(rawStatus).trim() : '';
+      let exp = typeof rawStatus === 'number' ? toDate(rawStatus) : null;   // certaines lignes ont la date d'expiration dans « Statut »
+      cExp.forEach(c => { if (r[c] != null && String(r[c]).trim() !== '') { const d = toDate(r[c]); if (d) exp = d; } });
+      const buy = cBuy >= 0 && r[cBuy] != null ? toDate(r[cBuy]) : null;
+      const dead = /EXPIR|REMPLACEE|BLOQU|PERDU|RESILI|ANNUL|DESACTIV/.test(status) || (exp && exp < today);
+      const note = [buy ? 'Achat ' + fmtDate(buy) : '', exp ? 'Expire ' + fmtDate(exp) : '', last4 ? '4 derniers chiffres : ' + last4 : '',
+        status ? 'Statut : ' + status.toLowerCase() : ''].filter(Boolean).join(' · ');
+      out.push({ card_number: num, bank, holder_name: name, phone, active: !dead, note });
+    }
+    return out;
   }
   const excelDate = v => {
     if (typeof v === 'number' && v > 30000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 86400000)); return d.toISOString().slice(0, 10); }
@@ -1777,7 +1828,10 @@
     wb.SheetNames.forEach(sn => {
       const rows = XL.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: null, blankrows: false });
       const bank = guessBank(sn, fileBank);
-      // Cartes : toute cellule texte « numéro + nom »
+      // Fiche clients en colonnes : reprise ligne par ligne (la dernière ligne d'une même carte l'emporte).
+      const fiche = parseClientSheet(rows, bank);
+      if (fiche) { fiche.forEach(c => cards.set(c.bank + '|' + c.card_number, Object.assign(c, { names: { [c.holder_name]: 1 } }))); return; }
+      // Sinon (fiches de rechargement) : toute cellule texte « numéro + nom »
       rows.forEach(r => r.forEach(v => {
         if (typeof v !== 'string') return;
         const m = v.match(CARD_RE);
@@ -1809,6 +1863,7 @@
       if (last) soldes.push({ file: fileName, sheet: sn, month: sheetMonth(sn), bank, ...last });
     });
     const cardList = [...cards.values()].map(c => ({ card_number: c.card_number, bank: c.bank, note: c.note,
+      phone: c.phone || null, active: c.active === undefined ? null : c.active,
       holder_name: Object.entries(c.names).sort((a, b) => b[1] - a[1])[0][0] }));
     // Feuilles mensuelles : on garde la plus récente. Autres feuilles : toutes.
     const monthly = soldes.filter(s => s.month).sort((a, b) => b.month - a.month);
@@ -1851,6 +1906,9 @@
   function renderImport(box, cards, soldes) {
     const byBank = {};
     cards.forEach(c => { byBank[c.bank] = (byBank[c.bank] || 0) + 1; });
+    const nInactive = cards.filter(c => c.active === false).length;
+    const nPhone = cards.filter(c => c.phone).length;
+    const nClients = new Set(cards.map(c => c.holder_name.replace(/[^A-Z0-9À-Ý]+/g, ' ').trim())).size;
     const targets = S.accounts.filter(a => a.active && a.kind !== 'caisse');
     const guessTarget = s => {
       const n = norm(s.sheet);
@@ -1866,11 +1924,13 @@
     box.innerHTML = `
       ${section(`Cartes clients trouvées : ${cards.length}`, `<div class="card pad">
         <p style="margin-top:0">${Object.entries(byBank).map(([b, n]) => `<span class="tag brand">${esc(b)} : ${n}</span>`).join(' ')}</p>
-        <div class="scrollx" style="max-height:260px;overflow-y:auto;margin-bottom:12px"><table class="tbl"><thead><tr><th>N°</th><th>Nom</th><th>Banque</th></tr></thead><tbody>
-          ${cards.slice(0, 300).map(c => `<tr><td class="num">${esc(c.card_number)}</td><td>${esc(c.holder_name)}</td><td>${esc(c.bank)}</td></tr>`).join('')}</tbody></table></div>
+        <p class="small">Environ <b>${nClients}</b> clients différents · ${nPhone} avec téléphone${nInactive ? ` · <b>${nInactive}</b> carte(s) expirée(s) ou remplacée(s), importée(s) comme inactives` : ''}.</p>
+        <div class="scrollx" style="max-height:300px;overflow-y:auto;margin-bottom:12px"><table class="tbl"><thead><tr><th>N°</th><th>Nom</th><th>Banque</th><th>Téléphone</th><th>État</th></tr></thead><tbody>
+          ${cards.slice(0, 300).map(c => `<tr><td class="num">${esc(c.card_number)}</td><td>${esc(c.holder_name)}</td><td>${esc(c.bank)}</td><td class="num">${esc(c.phone || '')}</td>
+            <td>${c.active === false ? '<span class="tag">inactive</span>' : c.active ? '<span class="tag green">active</span>' : ''}</td></tr>`).join('')}</tbody></table></div>
         ${cards.length > 300 ? `<p class="small muted">… et ${cards.length - 300} autres.</p>` : ''}
-        <button class="btn primary block" id="icards" ${cards.length ? '' : 'disabled'}>Importer ces ${cards.length} cartes</button>
-        <p class="small muted">Les cartes déjà présentes ne sont pas dupliquées.</p></div>`)}
+        <button class="btn primary block" id="icards" ${cards.length ? '' : 'disabled'}>Importer ces ${cards.length} cartes et leurs clients</button>
+        <p class="small muted">Rien n’est dupliqué : une carte déjà présente est complétée, un client déjà connu (même nom) reçoit ses nouvelles cartes. Les pièces d’identité, dates de naissance, e-mails et adresses ne sont pas repris.</p></div>`)}
       ${section('Soldes de départ', soldes.length ? `<div class="card pad">
         <p class="small muted" style="margin-top:0">Dernier solde lu dans chaque feuille. Choisissez le compte auquel l’appliquer : un ajustement « solde d’ouverture » mettra ce compte exactement à ce montant.</p>
         ${soldes.map((s, i) => `<div style="border-top:1px solid var(--line);padding:10px 0">
@@ -1880,14 +1940,18 @@
         <button class="btn primary block" id="isoldes" style="margin-top:12px">Enregistrer les soldes choisis</button></div>` : '<div class="list"><div class="empty">Aucune colonne « SOLDE GTP » trouvée.</div></div>')}`;
     const ic = box.querySelector('#icards');
     if (ic) ic.onclick = () => busy(ic, async () => {
-      let tot = { new: 0, updated: 0, existing: 0 };
-      for (let i = 0; i < cards.length; i += 400) {
-        const r = await rpc('import_cards', { cards: cards.slice(i, i + 400) });
-        tot.new += r.new; tot.updated += r.updated; tot.existing += r.existing;
+      if (!await ask('Importer les clients ?', `<p>${cards.length} cartes (environ ${nClients} clients) vont être enregistrées dans la base de l’équipe.</p>`, 'Importer')) return;
+      const tot = { cards_new: 0, cards_updated: 0, clients_new: 0, inactive: 0 };
+      for (let i = 0; i < cards.length; i += 300) {
+        ic.textContent = `Import en cours… ${Math.min(i + 300, cards.length)} / ${cards.length}`;
+        const r = await rpc('import_clients', { rows: cards.slice(i, i + 300) });
+        Object.keys(tot).forEach(k => { tot[k] += r[k] || 0; });
       }
-      toast(`${tot.new} carte(s) ajoutée(s), ${tot.updated} complétée(s), ${tot.existing} déjà présente(s).`, 'ok');
-      ic.textContent = 'Cartes importées ✓'; ic.disabled = true;
-    });
+      const msg = `${tot.clients_new} client(s) créé(s), ${tot.cards_new} carte(s) ajoutée(s), ${tot.cards_updated} déjà présente(s) mise(s) à jour, dont ${tot.inactive} inactive(s).`;
+      toast(msg, 'ok');
+      box.querySelector('#icards').insertAdjacentHTML('afterend', `<div class="alert ok" style="margin-top:10px">${esc(msg)}</div>`);
+      return 'done';
+    }).then(r => { if (r === 'done' && ic.isConnected) { ic.textContent = 'Import terminé ✓'; ic.disabled = true; } });
     const is = box.querySelector('#isoldes');
     if (is) is.onclick = async () => {
       const picks = [...box.querySelectorAll('[data-si]')].filter(s => s.value).map(s => ({ acc: acc(s.value), s: soldes[Number(s.dataset.si)] }));
