@@ -1,0 +1,16 @@
+{
+  "name": "Ayael Entreprise — Gestion",
+  "short_name": "Ayael",
+  "description": "Caisse, recharges de cartes et clôtures d'Ayael Entreprise",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#E52B2F",
+  "lang": "fr",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
