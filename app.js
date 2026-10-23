@@ -1468,7 +1468,7 @@
       </div>
       <button class="hero-cta only-mobile" data-do="vente">${icon('plus')}Nouvelle opération</button>
       <div class="actions four">
-        ${isDir() ? `<button class="action" data-do="appro">${icon('truck')}Approvisionner un GTP</button>`
+        ${isDir() ? `<button class="action" data-do="appro">${icon('truck')}Approvisionner un compte</button>`
           : `<button class="action" data-do="reversement">${icon('swap')}Reverser à la principale</button>`}
         <button class="action" data-do="transfert">${icon('swap')}Transfert entre comptes</button>
         <button class="action" data-do="ajust">${icon('adjust')}Ajuster un solde</button>
@@ -1566,15 +1566,19 @@
   // Comptes qu'un gérant peut utiliser : ceux de son agence (+ destination : l'agence principale).
   const ownAgencyAccs = () => S.accounts.filter(a => a.active && (isDir() || a.agence_id === S.me.agence_id));
 
-  function sheetAppro(gtpId) {
+  // Approvisionner un compte : GTP ou compte électronique (Mixx, Flooz, Tmoney, Wave…).
+  function sheetAppro(accId) {
+    const label = a => a.agence_id && (S.agences || []).length > 1 ? `${balLabel(a)} · ${agName(a.agence_id)}` : balLabel(a);
     const gtps = S.accounts.filter(a => a.kind === 'gtp' && a.active);
+    const elecs = S.accounts.filter(a => a.kind === 'electronique' && a.active);
     const srcs = S.accounts.filter(a => a.active && a.kind !== 'gtp');
+    const grp = (t, list) => list.length ? `<optgroup label="${esc(t)}">${list.map(a => `<option value="${a.id}" ${a.id === Number(accId) ? 'selected' : ''}>${esc(label(a))}</option>`).join('')}</optgroup>` : '';
     sheet({
-      title: 'Approvisionner un compte GTP',
-      body: `${field('Compte GTP', `<select class="input" name="gtp">${options(gtps.map(a => [a.id, balLabel(a)]), gtpId || gtps[0] && gtps[0].id)}</select>`)}
+      title: 'Approvisionner un compte',
+      body: `${field('Compte à approvisionner', `<select class="input" name="gtp">${grp('Comptes GTP', gtps)}${grp('Comptes électroniques (Mixx, Flooz…)', elecs)}</select>`)}
         ${field('Montant', moneyInput('amount', 'class="input money autofocus"'))}
-        ${field('Argent pris dans', `<select class="input" name="src">${options(srcs.map(a => [a.id, balLabel(a)]), '', '— Extérieur (non suivi dans l’application) —')}</select>`, 'Choisissez le coffre ou la banque si l’argent sort d’un compte suivi ici.')}
-        ${field('Détails', '<input class="input" name="details" placeholder="ex. versement GTCO du jour" autocomplete="off">')}`,
+        ${field('Argent pris dans', `<select class="input" name="src">${options(srcs.map(a => [a.id, label(a)]), '', '— Extérieur (non suivi dans l’application) —')}</select>`, 'Choisissez le coffre, une caisse ou la banque si l’argent sort d’un compte suivi ici. « Extérieur » : l’argent vient d’ailleurs (ex. versement à la banque, achat de crédit Mixx).')}
+        ${field('Détails', '<input class="input" name="details" placeholder="ex. versement GTCO du jour, achat de float Mixx…" autocomplete="off">')}`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
@@ -1645,7 +1649,7 @@
         ${a.note ? `<p class="small muted">${esc(a.note)}</p>` : ''}
         <div class="list">
           <button class="row" data-x="ops"><div class="ico neu">${icon('list')}</div><div class="main"><div class="t">Voir les opérations du mois</div></div>${icon('chev')}</button>
-          ${a.kind === 'gtp' && isDir() ? `<button class="row" data-x="appro"><div class="ico rc">${icon('truck')}</div><div class="main"><div class="t">Approvisionner</div></div>${icon('chev')}</button>` : ''}
+          ${['gtp', 'electronique'].includes(a.kind) && isDir() ? `<button class="row" data-x="appro"><div class="ico rc">${icon('truck')}</div><div class="main"><div class="t">Approvisionner</div></div>${icon('chev')}</button>` : ''}
           ${mine ? `<button class="row" data-x="tr"><div class="ico neu">${icon('swap')}</div><div class="main"><div class="t">Transférer vers un autre compte</div></div>${icon('chev')}</button>
           <button class="row" data-x="adj"><div class="ico neu">${icon('adjust')}</div><div class="main"><div class="t">Ajuster le solde</div></div>${icon('chev')}</button>` : ''}
           ${isDir() ? `<button class="row" data-x="edit"><div class="ico neu">${icon('tag')}</div><div class="main"><div class="t">Modifier le compte${a.kind === 'gtp' ? ' et la commission' : ''}</div></div>${icon('chev')}</button>` : ''}
