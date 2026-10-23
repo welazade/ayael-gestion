@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '8';
+  const DEMO_SCHEMA_VERSION = '10';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -58,11 +58,30 @@
     return `il y a ${Math.floor(s / 86400)} j`;
   }
   const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f(...a), ms); }; };
-  const isG = () => S.me && S.me.role === 'gerante';
+  const isDir = () => S.me && S.me.role === 'gerante';                 // direction (gérante de l'agence principale)
+  const isMgr = () => S.me && S.me.role !== 'agent';                   // direction ou gérant d'agence
+  const roleLabel = r => ({ gerante: 'Direction', gerant: 'Gérant(e) d’agence', agent: 'Agent' }[r] || r);
   const acc = id => S.accounts.find(a => a.id === Number(id));
   const activeCards = c => ((c && c.cards) || []).filter(k => k.active !== false);
+  // Compte utilisable par moi : de mon agence, ou commun à toutes les agences.
+  const myAcc = a => a.agence_id == null || a.agence_id === S.me.agence_id;
+  // Compte électronique à proposer pour un produit (ex. « Dépôt Mixx » à Noépé → le Mixx de Noépé).
+  function counterFor(p, elecs) {
+    if (!p.counter_account_id) return null;
+    const own = elecs.find(a => a.id === p.counter_account_id);
+    if (own) return own.id;
+    const words = norm(p.name).split(/\s+/).filter(w => w.length > 2 && !/^(DEPOT|RETRAIT|ENVOI|VENTE|ACHAT)$/.test(w));
+    const match = elecs.filter(a => words.some(w => norm(a.name).includes(w)));
+    return (match.find(a => a.agence_id === S.me.agence_id) || match[0] || {}).id || null;
+  }
   const initials = n => String(n || '?').replace(/\(.*?\)/g, ' ').split(/[^A-Za-zÀ-ÿ0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
-  const rpc = (n, p) => S.api.rpc(n, p || {});
+  // Pour la direction, les écrans de suivi montrent l'agence choisie en haut (vide = toutes).
+  const AG_RPC = new Set(['dashboard', 'list_operations', 'list_closings', 'report']);
+  const rpc = (n, p) => {
+    p = p || {};
+    if (AG_RPC.has(n) && isDir() && S.agence && p.agence_id === undefined) p = Object.assign({ agence_id: S.agence }, p);
+    return S.api.rpc(n, p);
+  };
   function period(key) {
     const d = new Date(), t = isoDay(d);
     switch (key) {
@@ -395,6 +414,11 @@
   async function loadBoot() {
     const b = await rpc('app_bootstrap');
     S.me = b.me; S.accounts = b.accounts || []; S.products = b.products || []; S.team = b.team || []; S.settings = b.settings || {};
+    S.agences = b.agences || [];
+    if (S.me && S.me.role === 'gerante') {
+      const saved = Number(store('agence')) || null;
+      S.agence = S.agences.some(g => g.id === saved) ? saved : null;
+    } else S.agence = null;
   }
 
   const onRemoteChange = debounce(async () => {
@@ -501,18 +525,21 @@
   // ---------------------------------------------------------------- coquille
   // Barre du bas (téléphone) : le « + » central ouvre une nouvelle opération.
   function tabs() {
-    if (isG()) return [['tableau', 'Tableau', 'home'], ['journal', 'Journal', 'list'], ['+'], ['clotures', 'Clôtures', 'lock'], ['plus', 'Plus', 'grid']];
+    if (isMgr()) return [['tableau', 'Tableau', 'home'], ['journal', 'Journal', 'list'], ['+'], ['clotures', 'Clôtures', 'lock'], ['plus', 'Plus', 'grid']];
     return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['+'], ['clients', 'Clients', 'users'], ['cloture', 'Clôture', 'lock']];
   }
   // Menu latéral (ordinateur)
   function navItems() {
-    if (isG()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
-      ['commissions', 'Commissions à vérifier', 'card'], ['rapports', 'Rapports', 'chart'], 'Réglages', ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'], ['equipe', 'Équipe', 'user'], ['comptes', 'Comptes et commissions', 'bank'],
-      ['produits', 'Produits de caisse', 'tag'], ['import', 'Importer depuis Excel', 'upload'], ['plus', 'Autres réglages', 'grid']];
+    if (isDir()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
+      ['commissions', 'Commissions à vérifier', 'card'], ['rapports', 'Rapports', 'chart'], 'Réglages', ['agences', 'Agences', 'bank'], ['equipe', 'Équipe', 'user'],
+      ['comptes', 'Comptes et commissions', 'bank'], ['produits', 'Produits de caisse', 'tag'], ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'],
+      ['import', 'Importer depuis Excel', 'upload'], ['plus', 'Autres réglages', 'grid']];
+    if (isMgr()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
+      ['commissions', 'Commissions à vérifier', 'card'], ['rapports', 'Rapports', 'chart'], ['cartes', 'Cartes clients', 'card'], ['plus', 'Plus', 'grid']];
     return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'],
       ...(S.me.can_recharge ? [['commissions', 'Commissions à vérifier', 'card']] : []), ['cloture', 'Clôture du soir', 'lock']];
   }
-  const firstView = () => isG() ? 'tableau' : 'accueil';
+  const firstView = () => isMgr() ? 'tableau' : 'accueil';
 
   function renderShell() {
     $app.innerHTML = `
@@ -521,12 +548,13 @@
         <button class="hero-cta" data-do="vente">${icon('plus')}Nouvelle opération <span class="kbd">N</span></button>
         <nav id="sidenav" aria-label="Menu"></nav>
         <button class="who" data-do="me"><span class="avatar">${esc(initials(S.me.full_name))}</span>
-          <span><span class="t" style="display:block">${esc(S.me.full_name)}</span><span class="s">${isG() ? 'Gérante' : 'Agent'} · mon compte</span></span></button>
+          <span><span class="t" style="display:block">${esc(S.me.full_name)}</span><span class="s">${esc(roleLabel(S.me.role))}${S.me.agence ? ' · ' + esc(S.me.agence) : ''}</span></span></button>
       </aside>
       <div class="shell">
         <header class="topbar">
           <img src="icons/logo.png" alt="Ayael Entreprise">
           <div class="title" id="vtitle"></div>
+          ${agenceSwitch()}
           <button class="btn primary small newop" data-do="vente">${icon('plus')} Nouvelle opération</button>
           <span class="live" id="live">…</span>
           <button class="avatar" data-do="me" aria-label="Mon compte">${esc(initials(S.me.full_name))}</button>
@@ -538,7 +566,19 @@
     renderBanners();
     renderTabbar();
     setLive(S.liveOn);
+    const sw = document.getElementById('agsel');
+    if (sw) sw.onchange = () => { S.agence = sw.value ? Number(sw.value) : null; store('agence', sw.value || null); route(); };
   }
+
+  // Choix de l'agence affichée (direction) ou nom de l'agence (gérant, agent).
+  function agenceSwitch() {
+    const ags = S.agences || [];
+    if (isDir() && ags.length > 1) {
+      return `<select class="input agsel" id="agsel" aria-label="Agence affichée">${options(ags.map(g => [g.id, g.name]), S.agence || '', 'Toutes les agences')}</select>`;
+    }
+    return ags.length > 1 || (S.me.agence && !S.me.is_main_agence) ? `<span class="tag brand agtag">${esc(S.me.agence || '')}</span>` : '';
+  }
+  const agName = id => ((S.agences || []).find(g => g.id === Number(id)) || {}).name || '';
 
   function renderTabbar() {
     const badge = k => k === 'clotures' && S.pendingClosings ? `<span class="badge">${S.pendingClosings}</span>` : '';
@@ -569,7 +609,7 @@
   async function route() {
     if (!S.me || !S.me.active || !document.getElementById('main')) return;
     let key = (location.hash.match(/^#\/([a-z]+)/) || [])[1];
-    const allowed = k => VIEWS[k] && (!VIEWS[k].gerante || isG()) && (!VIEWS[k].need || isG() || S.me[VIEWS[k].need]);
+    const allowed = k => VIEWS[k] && (!VIEWS[k].mgr || isMgr()) && (!VIEWS[k].dir || isDir()) && (!VIEWS[k].need || isMgr() || S.me[VIEWS[k].need]);
     if (!key || !allowed(key)) {
       key = firstView();
       if (location.hash !== '#/' + key) { history.replaceState(null, '', '#/' + key); }
@@ -632,7 +672,7 @@
       <div class="end"><div class="amt num ${cls}">${i.sign > 0 ? '+' : i.sign < 0 ? '−' : ''}${fmt(amt)}</div>${flag}</div></button>`;
   }
 
-  const opList = (list, showAgent = isG(), empty = 'Aucune opération.') =>
+  const opList = (list, showAgent = isMgr(), empty = 'Aucune opération.') =>
     list && list.length ? `<div class="list">${list.map(o => opRow(o, showAgent)).join('')}</div>` : `<div class="list"><div class="empty">${empty}</div></div>`;
 
   function balRow(b, clickable) {
@@ -641,14 +681,15 @@
     const sub = b.kind === 'caisse' ? `${b.today_ops} opération(s) aujourd’hui${b.last_at ? ' · ' + ago(b.last_at) : ''}`
       : b.kind === 'gtp' ? `${b.bank}${b.last_at ? ' · dernière opération ' + ago(b.last_at) : ''}` : (ACCOUNT_KIND[b.kind] || '');
     const tagName = clickable ? 'button' : 'div';
+    const agTxt = (S.agences || []).length > 1 && isMgr() ? (b.agence ? b.agence : 'Commun') + ' · ' : '';
     return `<${tagName} class="row" ${clickable ? `data-acc="${b.id}"` : ''}>
       <div class="ico ${b.kind === 'gtp' ? 'rc' : 'neu'}">${b.kind === 'gtp' ? esc((b.bank || '?').slice(0, 3)) : b.kind === 'caisse' ? esc(initials(b.agent)) : icon(b.kind === 'electronique' ? 'cash' : 'bank')}</div>
-      <div class="main"><div class="t">${esc(b.name)}</div><div class="s">${esc(sub)}</div></div>
+      <div class="main"><div class="t">${esc(b.name)}</div><div class="s">${esc(agTxt + sub)}</div></div>
       <div class="end"><div class="amt num ${neg ? 'neg' : low ? 'warn' : ''}">${fmt(b.balance)}</div>${neg ? '<span class="tag red">Négatif</span>' : low ? '<span class="tag amber">Bas</span>' : ''}</div></${tagName}>`;
   }
   const balList = (list, clickable) => list.length ? `<div class="list">${list.map(b => balRow(b, clickable)).join('')}</div>` : '<div class="list"><div class="empty">Aucun compte.</div></div>';
 
-  function rememberBalances(d) { (d.balances || []).forEach(b => S.bal.set(b.id, Number(b.balance))); S.pendingClosings = isG() ? d.pending_closings : 0; renderTabbar(); }
+  function rememberBalances(d) { (d.balances || []).forEach(b => S.bal.set(b.id, Number(b.balance))); S.pendingClosings = isMgr() ? d.pending_closings : 0; renderTabbar(); }
 
   // ---------------------------------------------------------------- écrans agent
   async function vAccueil(m) {
@@ -679,7 +720,7 @@
   }
 
   function sheetDepense() {
-    const accs = isG() ? S.accounts.filter(a => a.active && a.kind !== 'gtp' && (a.kind !== 'caisse' || a.agent_id === S.me.id)) : [];
+    const accs = isMgr() ? S.accounts.filter(a => a.active && a.kind !== 'gtp' && myAcc(a) && (a.kind !== 'caisse' || a.agent_id === S.me.id)) : [];
     sheet({
       title: 'Dépense / sortie',
       body: `${field('Montant', moneyInput('amount', 'class="input money autofocus"'))}
@@ -702,12 +743,12 @@
   // ---------------------------------------------------------------- nouvelle opération (vente)
   // Un seul formulaire : client → produit(s) → paiement → reçu.
   function sheetVente(preset = {}) {
-    const canC = isG() || S.me.can_caisse, canR = isG() || S.me.can_recharge;
+    const canC = isMgr() || S.me.can_caisse, canR = isMgr() || S.me.can_recharge;
     if (!canC && !canR) return toast('Vous n’avez aucun droit de saisie. Demandez à la gérante.', 'bad');
     const st = { client: preset.client || null, lines: [], pay: S.me.caisse_id, sel: '', cardId: null, gtpId: null, commEdited: false, passName: '' };
     if (preset.card && canR) { st.sel = 'R'; st.cardId = preset.card.id; }
     const prods = S.products.filter(p => p.active);
-    const pays = [[S.me.caisse_id, 'Espèces'], ...S.accounts.filter(a => a.active && (a.kind === 'electronique' || a.kind === 'banque'))
+    const pays = [[S.me.caisse_id, 'Espèces'], ...S.accounts.filter(a => a.active && myAcc(a) && (a.kind === 'electronique' || a.kind === 'banque'))
       .map(a => [a.id, a.kind === 'banque' ? 'Versement bancaire' : a.name])];
     const cats = {};
     prods.forEach(p => { const k = p.category || 'Autres'; (cats[k] = cats[k] || []).push(p); });
@@ -827,10 +868,11 @@
         upd();
       } else {
         const p = S.products.find(x => x.id === Number(st.sel));
-        const elecs = S.accounts.filter(a => a.active && (a.kind === 'electronique' || a.kind === 'banque'));
+        const elecs = S.accounts.filter(a => a.active && myAcc(a) && (a.kind === 'electronique' || a.kind === 'banque'));
+        const cnt = counterFor(p, elecs);
         box.innerHTML = `
           ${field(p.direction === 'entree' ? 'Montant' : 'Montant remis au client', moneyInput('vamt', 'autofocus'))}
-          ${p.counter_account_id ? field('Compte électronique utilisé', `<select class="input" id="vcounter">${options(elecs.map(a => [a.id, a.name]), p.counter_account_id)}</select>`) : ''}
+          ${p.counter_account_id ? field('Compte électronique utilisé', `<select class="input" id="vcounter">${cnt ? '' : '<option value="">— Choisir le compte —</option>'}${options(elecs.map(a => [a.id, a.name]), cnt || '')}</select>`) : ''}
           ${field('Détails (facultatif)', `<input class="input" id="vdet" autocomplete="off" placeholder="N° de téléphone, référence…" value="${p.counter_account_id && st.client && st.client.phone ? esc(st.client.phone) : ''}">`)}
           ${addBtn}`;
         bindMoney(box);
@@ -859,6 +901,7 @@
         if (!amt || amt <= 0) { if (!silent) toast('Indiquez le montant.', 'bad'); return false; }
         const p = S.products.find(x => x.id === Number(st.sel));
         const cnt = $('#vcounter') ? Number($('#vcounter').value) : null;
+        if ($('#vcounter') && !cnt) { if (!silent) toast('Choisissez le compte électronique utilisé.', 'bad'); return false; }
         const det = $('#vdet').value.trim();
         st.lines.push({ type: 'caisse', product_id: p.id, amount: amt, details: det, counter_account_id: cnt, sign: p.direction === 'entree' ? 1 : -1,
           label: p.name, sub: [det, cnt ? (acc(cnt) || {}).name : ''].filter(Boolean).join(' · ') });
@@ -1041,7 +1084,7 @@
           <dl class="kv"><dt>Téléphone</dt><dd>${esc(cl.phone || '—')}</dd>${cl.note ? `<dt>Note</dt><dd>${esc(cl.note)}</dd>` : ''}<dt>Opérations</dt><dd>${hist.filter(o => o.status === 'ok').length}${hist.length >= 40 ? '+' : ''}</dd></dl>
           ${section('Cartes', `<div class="list">${(cl.cards || []).map(k => `<div class="row"><div class="ico rc">${esc(k.bank.slice(0, 3))}</div><div class="main"><div class="t" style="${k.active === false ? 'text-decoration:line-through;color:var(--muted)' : ''}">${esc(k.card_number)}${k.active === false ? ' <span class="tag">inactive</span>' : ''}</div><div class="s">${esc(k.bank)}${k.holder_name !== cl.name ? ' · titulaire ' + esc(k.holder_name) : ''}${k.note ? ' · ' + esc(k.note) : ''}</div></div></div>`).join('') || '<div class="empty">Aucune carte.</div>'}</div>
             <button class="btn block small" data-x="card" style="margin-top:8px">${icon('plus')} Ajouter une carte</button>`)}
-        </div><div>${section('Historique', opList(hist, isG(), 'Aucune opération.'))}</div></div>`,
+        </div><div>${section('Historique', opList(hist, isMgr(), 'Aucune opération.'))}</div></div>`,
       foot: `<button class="btn" data-x="edit">Modifier la fiche</button><button class="btn primary" data-x="op">${icon('plus')} Nouvelle opération</button>`,
       onMount(c) {
         c.q('[data-x=edit]').onclick = () => { c.close(); sheetClientEdit(cl, saved => sheetClient(saved)); };
@@ -1106,7 +1149,7 @@
         ${field('Banque', `<select class="input" name="bank">${options(banks.map(b => [b, b]), c0.bank)}</select>`)}
         ${field('Téléphone (facultatif)', `<input class="input" name="phone" inputmode="tel" autocomplete="off" value="${esc(c0.phone || '')}">`)}
         ${field('Note (facultatif)', `<input class="input" name="note" autocomplete="off" value="${esc(c0.note || '')}" placeholder="ex. 4 derniers chiffres">`)}
-        ${card && isG() ? `<label class="check"><input type="checkbox" name="active" ${card.active ? 'checked' : ''}> Carte active</label>` : ''}
+        ${card && isDir() ? `<label class="check"><input type="checkbox" name="active" ${card.active ? 'checked' : ''}> Carte active</label>` : ''}
         ${card && card.n_recharges != null ? `<p class="small muted">${card.n_recharges} recharge(s) enregistrée(s) dans l’application.</p>` : ''}`,
       foot: `${card && then ? '<button class="btn" data-x="rc">Recharger</button>' : ''}<button class="btn primary" data-x="ok">Enregistrer</button>`,
       onMount(c) {
@@ -1128,7 +1171,7 @@
   // ---------------------------------------------------------------- journal
   async function vJournal(m) {
     const f = S.jf;
-    const agents = isG() ? S.team.map(t => [t.id, t.full_name]) : [];
+    const agents = isMgr() ? S.team.map(t => [t.id, t.full_name]) : [];
     m.innerHTML = `
       <div class="chips" id="per">${PERIODS.map(([k, l]) => `<button class="chip ${f.period === k ? 'on' : ''}" data-p="${k}">${l}</button>`).join('')}</div>
       <div class="filters ${f.period === 'custom' ? '' : 'hidden'}" id="dates">
@@ -1136,9 +1179,9 @@
         <input class="input" type="date" id="jto" value="${esc(f.to || todayIso())}" aria-label="Au"></div>
       <div class="filters">
         <select class="input" id="jkind" aria-label="Type">${options(Object.entries(KIND), f.kind, 'Tous les types')}</select>
-        ${isG() ? `<select class="input" id="juser" aria-label="Agent">${options(agents, f.user, 'Toute l’équipe')}</select>` : `<span></span>`}
+        ${isMgr() ? `<select class="input" id="juser" aria-label="Agent">${options(agents, f.user, 'Toute l’équipe')}</select>` : `<span></span>`}
       </div>
-      ${isG() ? `<div class="filters"><select class="input" id="jacc" aria-label="Compte">${options(S.accounts.map(a => [a.id, a.name]), f.account, 'Tous les comptes')}</select><span></span></div>` : ''}
+      ${isMgr() ? `<div class="filters"><select class="input" id="jacc" aria-label="Compte">${options(S.accounts.map(a => [a.id, a.name]), f.account, 'Tous les comptes')}</select><span></span></div>` : ''}
       <div class="search">${icon('search')}<input class="input" id="jq" placeholder="Chercher : client, carte, détail…" value="${esc(f.q)}" autocomplete="off"></div>
       <div id="jres"><div class="spinner"></div></div>`;
     m.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
@@ -1179,8 +1222,8 @@
         <div class="kpi"><div class="label">Sorties</div><div class="value num neg">${fmt(sumOut)}</div></div>
         <div class="kpi"><div class="label">Recharges</div><div class="value num">${fmt(rech.reduce((s, o) => s + Number(o.amount), 0))}</div><div class="sub">${rech.length} · com. ${fmt(rech.reduce((s, o) => s + Number(o.commission), 0))}</div></div>
       </div>
-      ${isG() ? `<button class="btn block small" id="jexp" style="margin-bottom:8px">${icon('download')} Exporter cette liste en Excel</button>` : ''}
-      ${list.length ? `<div class="only-mobile">${Object.keys(byDay).sort().reverse().map(day => `<div class="daytitle"><span>${fmtDate(day)}</span><span>${byDay[day].length} op.</span></div>${opList(byDay[day], isG())}`).join('')}</div>
+      ${isMgr() ? `<button class="btn block small" id="jexp" style="margin-bottom:8px">${icon('download')} Exporter cette liste en Excel</button>` : ''}
+      ${list.length ? `<div class="only-mobile">${Object.keys(byDay).sort().reverse().map(day => `<div class="daytitle"><span>${fmtDate(day)}</span><span>${byDay[day].length} op.</span></div>${opList(byDay[day], isMgr())}`).join('')}</div>
         <div class="only-desktop">${opTable(list)}</div>`
         : '<div class="list"><div class="empty">Aucune opération sur cette période.</div></div>'}
       ${list.length >= 1000 ? '<p class="small muted">Seules les 1 000 dernières opérations sont affichées. Réduisez la période ou utilisez l’export.</p>' : ''}`;
@@ -1192,7 +1235,7 @@
   function opTable(list) {
     const multiDay = new Set(list.map(o => o.op_day)).size > 1;
     return `<div class="dtable scrollx"><table><thead><tr>
-        <th>${multiDay ? 'Date' : 'Heure'}</th><th>Type</th><th>Client / produit</th><th>Détails</th><th>Compte</th>${isG() ? '<th>Agent</th>' : ''}<th class="r">Montant</th><th class="r">Com.</th><th>Reçu</th></tr></thead><tbody>
+        <th>${multiDay ? 'Date' : 'Heure'}</th><th>Type</th><th>Client / produit</th><th>Détails</th><th>Compte</th>${isMgr() ? '<th>Agent</th>' : ''}<th class="r">Montant</th><th class="r">Com.</th><th>Reçu</th></tr></thead><tbody>
       ${list.map(o => {
         S.ops.set(o.id, o);
         const i = opInfo(o);
@@ -1206,7 +1249,7 @@
           <td><div style="font-weight:600">${esc(who || what)}</div>${who ? `<div class="sub">${esc(what)}</div>` : ''}</td>
           <td class="sub">${esc(o.details || '')}</td>
           <td class="sub">${esc([o.account, o.account2 && !/^Caisse/.test(o.account2) ? o.account2 : ''].filter(Boolean).join(' → '))}</td>
-          ${isG() ? `<td class="sub">${esc(o.agent || '')}</td>` : ''}
+          ${isMgr() ? `<td class="sub">${esc(o.agent || '')}</td>` : ''}
           <td class="r num amt ${cls}" style="font-weight:650">${i.sign > 0 ? '+' : i.sign < 0 ? '−' : ''}${fmt(amt)}</td>
           <td class="r num sub">${o.kind === 'recharge' ? fmtN(o.commission) : ''}</td>
           <td class="sub">${o.receipt_id ? 'N° ' + pad(o.receipt_id) : ''}</td></tr>`;
@@ -1218,7 +1261,8 @@
     if (!o) return;
     const i = opInfo(o);
     const age = (Date.now() - new Date(o.created_at).getTime()) / 60000;
-    const canCancel = o.status === 'ok' && (isG() || (o.user_id === S.me.id && age < 30 && !o.closing_id && ['caisse', 'recharge', 'depense'].includes(o.kind)));
+    const canCancel = o.status === 'ok' && (isDir() || (isMgr() && o.agence_id === S.me.agence_id)
+      || (o.user_id === S.me.id && age < 30 && !o.closing_id && ['caisse', 'recharge', 'depense'].includes(o.kind)));
     const label2 = { caisse: 'Compte électronique', recharge: 'Payé en', approvisionnement: 'Source', transfert: 'Vers', cloture: 'Vers' }[o.kind] || 'Compte 2';
     const rows = [
       ['Type', KIND[o.kind]], ['Date', fmtDT(o.created_at)], ['Saisi par', o.agent],
@@ -1236,7 +1280,7 @@
     sheet({
       title: i.title,
       body: `<dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v ?? '')}</dd>`).join('')}</dl>
-        ${o.status === 'ok' && !canCancel && !isG() ? '<p class="small muted" style="margin-top:16px">Pour annuler cette opération, demandez à la gérante.</p>' : ''}`,
+        ${o.status === 'ok' && !canCancel && !isMgr() ? '<p class="small muted" style="margin-top:16px">Pour annuler cette opération, demandez à votre gérant(e).</p>' : ''}`,
       foot: (canCancel ? '<button class="btn danger" data-x="cancel">Annuler l’opération</button>' : '') +
         (o.receipt_id ? `<button class="btn" data-x="rec">${icon('receipt')} Voir le reçu N° ${pad(o.receipt_id)}</button>` : '') +
         (canVerify(o) ? '<button class="btn" data-x="com">Vérifier la commission</button>' : ''),
@@ -1256,7 +1300,8 @@
   }
 
   // ---------------------------------------------------------------- commissions à vérifier
-  const canVerify = o => o.kind === 'recharge' && o.status === 'ok' && (isG() || (S.me.can_recharge && o.user_id === S.me.id));
+  const canVerify = o => o.kind === 'recharge' && o.status === 'ok'
+    && (isDir() || (isMgr() && o.agence_id === S.me.agence_id) || (S.me.can_recharge && o.user_id === S.me.id));
 
   function sheetVerifyCommission(o) {
     sheet({
@@ -1310,7 +1355,7 @@
         <div class="dtable scrollx"><table><thead><tr><th>${new Set(list.map(o => o.op_day)).size > 1 ? 'Date' : 'Heure'}</th><th>Client · carte</th><th>Compte</th><th class="r">Montant</th><th class="r">Commission reversée</th><th></th></tr></thead><tbody>
           ${list.map(o => `<tr style="cursor:default" data-row="${o.id}">
             <td class="num">${new Set(list.map(x => x.op_day)).size > 1 ? fmtDate(o.op_day) + ' ' : ''}${fmtTime(o.created_at)}</td>
-            <td><div style="font-weight:600">${esc(o.client_name || o.holder_name || '')}</div><div class="sub">${esc(o.card_number || '')}${isG() && o.agent ? ' · ' + esc(o.agent) : ''}</div></td>
+            <td><div style="font-weight:600">${esc(o.client_name || o.holder_name || '')}</div><div class="sub">${esc(o.card_number || '')}${isMgr() && o.agent ? ' · ' + esc(o.agent) : ''}</div></td>
             <td class="sub">${esc(o.account || '')}</td>
             <td class="r num">${fmtN(o.amount)}</td>
             <td class="r">${canVerify(o) ? `<input class="input money" data-com="${o.id}" inputmode="numeric" value="${fmtN(o.commission)}" style="width:110px;min-height:40px;font-size:16px;text-align:right;padding:6px 10px">` : `<span class="num">${fmtN(o.commission)}</span>`}</td>
@@ -1395,7 +1440,7 @@
   function closingRow(c) {
     const st = { soumise: '<span class="tag amber">En attente</span>', validee: '<span class="tag green">Validée</span>', rejetee: '<span class="tag red">Refusée</span>' }[c.status];
     return `<div class="row"><div class="ico neu">${icon('lock')}</div>
-      <div class="main"><div class="t">${isG() ? esc(c.agent) + ' · ' : ''}${fmtDT(c.created_at)}</div>
+      <div class="main"><div class="t">${isMgr() ? esc(c.agent) + (isDir() && !S.agence && c.agence && (S.agences || []).length > 1 ? ' (' + esc(c.agence) + ')' : '') + ' · ' : ''}${fmtDT(c.created_at)}</div>
         <div class="s">Compté ${fmt(c.counted)} · écart <span class="${c.gap < 0 ? 'neg' : c.gap > 0 ? 'warn' : ''}">${fmtSigned(c.gap)}</span> · remis ${fmt(c.handed)}${c.manager_note ? ' · ' + esc(c.manager_note) : ''}</div></div>
       <div class="end">${st}</div></div>`;
   }
@@ -1423,11 +1468,13 @@
       </div>
       <button class="hero-cta only-mobile" data-do="vente">${icon('plus')}Nouvelle opération</button>
       <div class="actions four">
-        <button class="action" data-do="appro">${icon('truck')}Approvisionner un GTP</button>
+        ${isDir() ? `<button class="action" data-do="appro">${icon('truck')}Approvisionner un GTP</button>`
+          : `<button class="action" data-do="reversement">${icon('swap')}Reverser à la principale</button>`}
         <button class="action" data-do="transfert">${icon('swap')}Transfert entre comptes</button>
         <button class="action" data-do="ajust">${icon('adjust')}Ajuster un solde</button>
         <button class="action" data-do="depense">${icon('out')}Dépense</button>
       </div>
+      ${(d.liaisons || []).length ? section('Entre agences', liaisonList(d.liaisons)) : ''}
       <div class="cols">
         <div>
           ${section('Soldes GTP', balList(gtp, true), `<span class="num">${fmt(sum(gtp))}</span>`)}
@@ -1443,6 +1490,81 @@
   }
 
   const balLabel = a => `${a.name} (${fmt(S.bal.get(a.id) ?? 0)})`;
+
+  // ---------------------------------------------------------------- entre agences
+  const mainAgence = () => (S.agences || []).find(g => g.is_main) || {};
+  function liaisonText(l) {
+    const b = Number(l.balance), n = mainAgence().name || 'Agence principale';
+    const main = /^agence\b/i.test(n) ? 'l’' + n.charAt(0).toLowerCase() + n.slice(1) : n;   // « l’agence principale »
+    const Main = main.charAt(0).toUpperCase() + main.slice(1);
+    if (Math.abs(b) < 1) return { t: `${l.agence} et ${main} sont à jour`, cls: 'pos' };
+    return b > 0 ? { t: `${l.agence} doit ${fmt(b)} à ${main}`, cls: 'warn' } : { t: `${Main} doit ${fmt(-b)} à ${l.agence}`, cls: 'neg' };
+  }
+  const liaisonList = list => `<div class="list">${list.map(l => {
+    const x = liaisonText(l);
+    return `<button class="row" data-liaison="${l.agence_id}"><div class="ico neu">${icon('swap')}</div>
+      <div class="main"><div class="t">${esc(x.t)}</div><div class="s">Recharges, retraits RIA / Western Union, recharges de comptes… · toucher pour le détail</div></div>
+      <div class="end"><div class="amt num ${x.cls}">${fmt(Math.abs(l.balance))}</div></div></button>`;
+  }).join('')}</div>`;
+
+  async function sheetLiaison(agId) {
+    const r = await rpc('liaison_detail', { agence_id: agId });
+    const x = liaisonText({ agence: r.agence, balance: r.balance });
+    sheet({
+      title: `${r.agence} ↔ ${mainAgence().name || 'agence principale'}`, wide: true,
+      body: `<div class="alert ${Math.abs(r.balance) < 1 ? 'ok' : 'warn'}"><span><b>${esc(x.t)}</b></span></div>
+        <p class="small muted">Montants positifs : ${esc(r.agence)} doit cet argent à la principale (ex. une recharge encaissée à ${esc(r.agence)}). Négatifs : la principale le doit à ${esc(r.agence)} (ex. un retrait RIA payé par ${esc(r.agence)}).</p>
+        ${r.lines.length ? `<div class="dtable scrollx"><table><thead><tr><th>Date</th><th>Opération</th><th>Détail</th><th class="r">Montant</th></tr></thead><tbody>
+          ${r.lines.map(o => { S.ops.set(o.id, o); const i = opInfo(o); return `<tr data-op="${o.id}">
+            <td class="num">${fmtDate(o.op_day)} ${fmtTime(o.created_at)}</td><td>${esc(i.title)}</td><td class="sub">${esc([o.kind === 'recharge' ? 'carte ' + (o.card_number || '') : o.client_name, o.details, o.agent].filter(Boolean).join(' · '))}</td>
+            <td class="r num ${o.liaison > 0 ? 'warn' : 'neg'}" style="font-weight:650">${fmtSigned(o.liaison)}</td></tr>`; }).join('')}</tbody></table></div>`
+          : '<div class="list"><div class="empty">Aucune opération entre les deux agences.</div></div>'}`,
+      foot: `<button class="btn primary" data-x="rev">${icon('swap')} Enregistrer un reversement</button>`,
+      onMount(c) { c.q('[data-x=rev]').onclick = () => { c.close(); sheetReversement(agId); }; },
+    });
+  }
+
+  // Reversement : l'argent remis entre une agence et l'agence principale (ou l'inverse).
+  function sheetReversement(agId) {
+    const main = mainAgence();
+    const ag = isDir() ? (agId || ((S.agences || []).find(g => !g.is_main) || {}).id) : S.me.agence_id;
+    if (!ag || ag === main.id) return toast('Aucune agence secondaire.', 'bad');
+    const accOf = id => S.accounts.filter(a => a.active && a.agence_id === id && ['coffre', 'caisse', 'electronique', 'banque'].includes(a.kind) && (a.kind !== 'caisse' || isDir() || a.agent_id === S.me.id));
+    const mainAccs = S.accounts.filter(a => a.active && (a.agence_id === main.id || (a.agence_id == null && a.kind !== 'gtp')) && (a.kind !== 'caisse' || a.agent_id === S.me.id || isDir()));
+    const defCof = list => (list.find(a => a.kind === 'coffre') || list[0] || {}).id;
+    sheet({
+      title: 'Reversement entre agences',
+      body: `${isDir() ? field('Agence', `<select class="input" name="ag">${options((S.agences || []).filter(g => !g.is_main).map(g => [g.id, g.name]), ag)}</select>`) : ''}
+        <div class="field"><span>Sens</span><div class="chips wrap">
+          <button type="button" class="chip on" data-chip="dir" data-v="up">${esc(agName(ag) || 'Agence')} → ${esc(main.name || 'Principale')}</button>
+          ${isDir() ? `<button type="button" class="chip" data-chip="dir" data-v="down">${esc(main.name || 'Principale')} → ${esc(agName(ag) || 'Agence')}</button>` : ''}</div></div>
+        <div id="revacc"></div>
+        ${field('Montant', moneyInput('amount', 'autofocus'))}
+        ${field('Détails', '<input class="input" name="details" autocomplete="off" placeholder="ex. remise du soir, versement Wave…">')}`,
+      foot: '<button class="btn primary" data-x="ok">Enregistrer le reversement</button>',
+      onMount(c) {
+        let cur = ag;
+        const draw = () => {
+          const up = chipVal(c, 'dir') !== 'down';
+          const from = up ? accOf(cur) : mainAccs, to = up ? mainAccs : accOf(cur);
+          c.q('#revacc').innerHTML = `<div class="grid2">${field('Argent pris dans', `<select class="input" name="from">${options(from.map(a => [a.id, balLabel(a)]), defCof(from))}</select>`)}
+            ${field('Argent remis dans', `<select class="input" name="to">${options(to.map(a => [a.id, a.name]), defCof(to))}</select>`)}</div>`;
+        };
+        chipGroup(c, 'dir', draw);
+        const s = c.q('[name=ag]'); if (s) s.onchange = () => { cur = Number(s.value); draw(); };
+        draw();
+        c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          const up = chipVal(c, 'dir') !== 'down';
+          await rpc('op_transfert', { from_id: Number(c.q('[name=from]').value), to_id: Number(c.q('[name=to]').value), amount: parseAmt(c.q('[name=amount]').value),
+            details: `Reversement ${up ? agName(cur) + ' → ' + (main.name || 'principale') : (main.name || 'principale') + ' → ' + agName(cur)}${c.q('[name=details]').value ? ' · ' + c.q('[name=details]').value : ''}` });
+          c.close(); toast('Reversement enregistré.', 'ok'); refreshNow();
+        });
+      },
+    });
+  }
+
+  // Comptes qu'un gérant peut utiliser : ceux de son agence (+ destination : l'agence principale).
+  const ownAgencyAccs = () => S.accounts.filter(a => a.active && (isDir() || a.agence_id === S.me.agence_id));
 
   function sheetAppro(gtpId) {
     const gtps = S.accounts.filter(a => a.kind === 'gtp' && a.active);
@@ -1465,11 +1587,12 @@
   }
 
   function sheetTransfert(fromId) {
-    const accs = S.accounts.filter(a => a.active);
+    const accs = ownAgencyAccs();
+    const dest = isDir() ? accs : S.accounts.filter(a => a.active && (a.agence_id === S.me.agence_id || a.agence_id === mainAgence().id));
     sheet({
       title: 'Transfert entre comptes',
       body: `${field('De', `<select class="input" name="from">${options(accs.map(a => [a.id, balLabel(a)]), fromId || '')}</select>`)}
-        ${field('Vers', `<select class="input" name="to">${options(accs.map(a => [a.id, balLabel(a)]), '')}</select>`)}
+        ${field('Vers', `<select class="input" name="to">${options(dest.map(a => [a.id, a.agence_id && a.agence_id !== S.me.agence_id ? `${a.name} (${agName(a.agence_id)})` : balLabel(a)]), '')}</select>`)}
         ${field('Montant', moneyInput('amount', 'class="input money autofocus"'))}
         ${field('Détails', '<input class="input" name="details" placeholder="ex. versement en banque, fond de caisse…" autocomplete="off">')}`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
@@ -1484,7 +1607,7 @@
   }
 
   function sheetAjust(accId) {
-    const accs = S.accounts.filter(a => a.active || a.id === accId);
+    const accs = S.accounts.filter(a => (a.active || a.id === accId) && (isDir() || a.agence_id === S.me.agence_id));
     sheet({
       title: 'Ajuster un solde',
       body: `<div class="alert warn">Un ajustement corrige un solde sans opération réelle (erreur, solde d’ouverture…). Il reste visible dans le journal.</div>
@@ -1514,24 +1637,26 @@
     const a = acc(id);
     if (!a) return;
     const bal = S.bal.get(a.id) ?? 0;
+    const mine = isDir() || a.agence_id === S.me.agence_id;
     sheet({
       title: a.name,
-      body: `<div class="hero" style="margin-bottom:14px"><div class="label">${esc(ACCOUNT_KIND[a.kind] || '')}${a.bank ? ' · ' + esc(a.bank) : ''}</div><div class="big num">${fmt(bal)}</div></div>
+      body: `<div class="hero" style="margin-bottom:14px"><div class="label">${esc(ACCOUNT_KIND[a.kind] || '')}${a.bank ? ' · ' + esc(a.bank) : ''}${(S.agences || []).length > 1 ? ' · ' + esc(a.agence_id ? agName(a.agence_id) : 'commun à toutes les agences') : ''}</div><div class="big num">${fmt(bal)}</div></div>
         ${a.kind === 'gtp' ? `<p class="small muted">Commission : ${esc(commRule(a))}</p>` : ''}
         ${a.note ? `<p class="small muted">${esc(a.note)}</p>` : ''}
         <div class="list">
           <button class="row" data-x="ops"><div class="ico neu">${icon('list')}</div><div class="main"><div class="t">Voir les opérations du mois</div></div>${icon('chev')}</button>
-          ${a.kind === 'gtp' ? `<button class="row" data-x="appro"><div class="ico rc">${icon('truck')}</div><div class="main"><div class="t">Approvisionner</div></div>${icon('chev')}</button>` : ''}
-          <button class="row" data-x="tr"><div class="ico neu">${icon('swap')}</div><div class="main"><div class="t">Transférer vers un autre compte</div></div>${icon('chev')}</button>
-          <button class="row" data-x="adj"><div class="ico neu">${icon('adjust')}</div><div class="main"><div class="t">Ajuster le solde</div></div>${icon('chev')}</button>
-          <button class="row" data-x="edit"><div class="ico neu">${icon('tag')}</div><div class="main"><div class="t">Modifier le compte${a.kind === 'gtp' ? ' et la commission' : ''}</div></div>${icon('chev')}</button>
-        </div>`,
+          ${a.kind === 'gtp' && isDir() ? `<button class="row" data-x="appro"><div class="ico rc">${icon('truck')}</div><div class="main"><div class="t">Approvisionner</div></div>${icon('chev')}</button>` : ''}
+          ${mine ? `<button class="row" data-x="tr"><div class="ico neu">${icon('swap')}</div><div class="main"><div class="t">Transférer vers un autre compte</div></div>${icon('chev')}</button>
+          <button class="row" data-x="adj"><div class="ico neu">${icon('adjust')}</div><div class="main"><div class="t">Ajuster le solde</div></div>${icon('chev')}</button>` : ''}
+          ${isDir() ? `<button class="row" data-x="edit"><div class="ico neu">${icon('tag')}</div><div class="main"><div class="t">Modifier le compte${a.kind === 'gtp' ? ' et la commission' : ''}</div></div>${icon('chev')}</button>` : ''}
+        </div>
+        ${!mine ? `<p class="small muted">Compte commun : seule la direction peut le modifier ou l’ajuster.</p>` : ''}`,
       onMount(c) {
         c.q('[data-x=ops]').onclick = () => { c.close(); Object.assign(S.jf, { period: 'month', account: String(a.id), kind: '', user: '', q: '' }); location.hash = '#/journal'; if (S.view === 'journal') route(); };
         const ap = c.q('[data-x=appro]'); if (ap) ap.onclick = () => { c.close(); sheetAppro(a.id); };
-        c.q('[data-x=tr]').onclick = () => { c.close(); sheetTransfert(a.id); };
-        c.q('[data-x=adj]').onclick = () => { c.close(); sheetAjust(a.id); };
-        c.q('[data-x=edit]').onclick = () => { c.close(); sheetAccountEdit(a); };
+        const tr = c.q('[data-x=tr]'); if (tr) tr.onclick = () => { c.close(); sheetTransfert(a.id); };
+        const adj = c.q('[data-x=adj]'); if (adj) adj.onclick = () => { c.close(); sheetAjust(a.id); };
+        const ed = c.q('[data-x=edit]'); if (ed) ed.onclick = () => { c.close(); sheetAccountEdit(a); };
       },
     });
   }
@@ -1542,12 +1667,12 @@
     m.innerHTML = `
       ${section('À valider', pend.length ? pend.map(c => `
         <div class="card pad" style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:10px"><b>${esc(c.agent)}</b><span class="small muted">${fmtDT(c.created_at)}</span></div>
+          <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:10px"><b>${esc(c.agent)}${(S.agences || []).length > 1 && c.agence ? ` <span class="tag">${esc(c.agence)}</span>` : ''}</b><span class="small muted">${fmtDT(c.created_at)}</span></div>
           <dl class="kv">
             <dt>Attendu</dt><dd class="num">${fmt(c.expected)}</dd>
             <dt>Compté</dt><dd class="num">${fmt(c.counted)}</dd>
             <dt>Écart</dt><dd class="num ${c.gap < 0 ? 'neg' : c.gap > 0 ? 'warn' : 'pos'}">${c.gap === 0 ? 'Caisse juste' : fmtSigned(c.gap)}</dd>
-            <dt>Remis à la gérante</dt><dd class="num">${fmt(c.handed)}</dd>
+            <dt>Remis (au coffre)</dt><dd class="num">${fmt(c.handed)}</dd>
             <dt>Gardé en caisse</dt><dd class="num">${fmt(c.counted - c.handed)}</dd>
             ${c.note ? `<dt>Note</dt><dd>${esc(c.note)}</dd>` : ''}
           </dl>
@@ -1556,7 +1681,7 @@
       ${section('Historique', hist.filter(c => c.status !== 'soumise').length ? `<div class="list">${hist.filter(c => c.status !== 'soumise').map(closingRow).join('')}</div>` : '<div class="list"><div class="empty">Aucune clôture traitée.</div></div>')}`;
     m.querySelectorAll('[data-val]').forEach(b => b.onclick = async () => {
       const c = pend.find(x => x.id === Number(b.dataset.val));
-      const ok = await ask('Valider la clôture', `<p>${fmt(c.handed)} passeront de la caisse de ${esc(c.agent)} au coffre.</p>${c.gap ? `<p>L’écart de ${fmtSigned(c.gap)} sera enregistré comme ajustement de sa caisse.</p>` : ''}`, 'Valider');
+      const ok = await ask('Valider la clôture', `<p>${fmt(c.handed)} passeront de la caisse de ${esc(c.agent)} au coffre${c.agence && (S.agences || []).length > 1 ? ' de ' + esc(c.agence) : ''}.</p>${c.gap ? `<p>L’écart de ${fmtSigned(c.gap)} sera enregistré comme ajustement de sa caisse.</p>` : ''}`, 'Valider');
       if (ok) busy(b, async () => { await rpc('closing_validate', { id: c.id, accept: true }); toast('Clôture validée.', 'ok'); route(); });
     });
     m.querySelectorAll('[data-rej]').forEach(b => b.onclick = async () => {
@@ -1570,20 +1695,21 @@
     m.innerHTML = `
       ${section('Suivi', `<div class="list">
         ${item('#/clients', 'users', 'Clients', 'Fiches clients, cartes, historique')}
-        ${item('#/doublons', 'users', 'Clients en double', 'Repérer et fusionner les fiches d’une même personne')}
+        ${isDir() ? item('#/doublons', 'users', 'Clients en double', 'Repérer et fusionner les fiches d’une même personne') : ''}
         ${item('#/commissions', 'card', 'Commissions à vérifier', 'Pointer les commissions avec le rapport du GTP')}
-        ${item('#/rapports', 'chart', 'Rapports', 'Par produit, par GTP, par agent, commissions par mois')}
+        ${item('#/rapports', 'chart', 'Rapports', 'Par agence, par produit, par GTP, par agent, commissions par mois')}
         ${item('#/cartes', 'card', 'Cartes clients', 'Rechercher, corriger, ajouter')}
         <button class="row" data-do="export"><div class="ico neu">${icon('download')}</div><div class="main"><div class="t">Exporter en Excel</div><div class="s">Sauvegarde de toutes les opérations d’une période</div></div>${icon('chev')}</button>
       </div>`)}
-      ${section('Réglages', `<div class="list">
-        ${item('#/equipe', 'users', 'Équipe', 'Activer les agents, choisir leurs droits')}
+      ${isDir() ? section('Réglages', `<div class="list">
+        ${item('#/agences', 'bank', 'Agences', 'Créer une agence, soldes entre agences')}
+        ${item('#/equipe', 'users', 'Équipe', 'Activer les agents, choisir leur agence et leurs droits')}
         ${item('#/comptes', 'bank', 'Comptes et commissions', 'GTP, comptes électroniques, coffre, seuils d’alerte')}
         ${item('#/produits', 'tag', 'Produits de caisse', 'Boutons des opérations de caisse')}
         ${item('#/import', 'upload', 'Importer depuis Excel', 'Cartes clients et soldes de départ')}
         <button class="row" data-do="company"><div class="ico neu">${icon('receipt')}</div><div class="main"><div class="t">Reçu et coordonnées</div><div class="s">Adresse, téléphone, message, format d’impression</div></div>${icon('chev')}</button>
-      </div>`)}
-      ${section('Mon compte', `<div class="list"><button class="row" data-do="me"><div class="ico rc">${esc(initials(S.me.full_name))}</div><div class="main"><div class="t">${esc(S.me.full_name)}</div><div class="s">Gérante · mot de passe, déconnexion</div></div>${icon('chev')}</button></div>`)}`;
+      </div>`) : ''}
+      ${section('Mon compte', `<div class="list"><button class="row" data-do="me"><div class="ico rc">${esc(initials(S.me.full_name))}</div><div class="main"><div class="t">${esc(S.me.full_name)}</div><div class="s">${esc(roleLabel(S.me.role))} · mot de passe, déconnexion</div></div>${icon('chev')}</button></div>`)}`;
     return Promise.resolve();
   }
 
@@ -1601,7 +1727,10 @@
       <div class="chips">${PERIODS.filter(x => x[0] !== '7d').map(([k, l]) => `<button class="chip ${p.period === k ? 'on' : ''}" data-p="${k}">${l}</button>`).join('')}</div>
       <div class="filters ${p.period === 'custom' ? '' : 'hidden'}">
         <input class="input" type="date" id="rfrom" value="${esc(from)}" aria-label="Du"><input class="input" type="date" id="rto" value="${esc(to)}" aria-label="Au"></div>
-      <p class="small muted" style="margin:0 4px 14px">Du ${fmtDate(from)} au ${fmtDate(to)}</p>
+      <p class="small muted" style="margin:0 4px 14px">Du ${fmtDate(from)} au ${fmtDate(to)}${r.agence_id ? ' · agence ' + esc(agName(r.agence_id)) : (S.agences || []).length > 1 ? ' · toutes les agences' : ''}</p>
+      ${(r.by_agence || []).length > 1 ? section('Par agence', tbl(['Agence', 'Opér.', 'Recharges', 'Rechargé', 'Commission', 'Caisse', 'Dépenses', 'Doit à la principale'],
+        r.by_agence.map(x => [esc(x.agence), x.n, x.recharges_n, fmtN(x.recharges_amount), fmtN(x.commission), x.caisse_n, fmtN(x.depenses), x.liaison == null ? '—' : fmtN(x.liaison)]),
+        ['Total', s(r.by_agence, 'n'), s(r.by_agence, 'recharges_n'), fmtN(s(r.by_agence, 'recharges_amount')), fmtN(s(r.by_agence, 'commission')), s(r.by_agence, 'caisse_n'), fmtN(s(r.by_agence, 'depenses')), ''])) : ''}
       ${section('Recharges par compte GTP', tbl(['Compte', 'Nb', 'Rechargé', 'Commission', 'Approvisionné'],
         r.by_gtp.map(x => [esc(x.name), x.n, fmtN(x.amount), fmtN(x.commission), fmtN(x.appro)]),
         ['Total', s(r.by_gtp, 'n'), fmtN(s(r.by_gtp, 'amount')), fmtN(s(r.by_gtp, 'commission')), fmtN(s(r.by_gtp, 'appro'))]))}
@@ -1761,11 +1890,14 @@
   async function vEquipe(m) {
     await loadBoot();
     m.innerHTML = `
-      <div class="alert info"><span>Pour ajouter un agent : sur son téléphone, il ouvre l’application et touche « Créer un compte ». Il apparaît ensuite ici : activez-le et choisissez ses droits.</span></div>
-      <div class="list">${S.team.map(t => `<button class="row" data-prof="${t.id}">
-        <div class="ico ${t.role === 'gerante' ? 'rc' : 'neu'}">${esc(initials(t.full_name))}</div>
-        <div class="main"><div class="t">${esc(t.full_name)} ${t.active ? '' : '<span class="tag amber">À activer</span>'}</div>
-          <div class="s">${t.role === 'gerante' ? 'Gérante' : 'Agent'} · identifiant « ${esc(t.login || '')} »${t.role === 'agent' ? ` · ${[t.can_caisse && 'caisse', t.can_recharge && 'recharges'].filter(Boolean).join(' + ') || 'aucun droit'}` : ''}</div></div>${icon('chev')}</button>`).join('')}</div>`;
+      <div class="alert info"><span>Pour ajouter quelqu’un : sur son téléphone ou son ordinateur, il ouvre l’application et touche « Créer un compte ». Il apparaît ensuite ici : choisissez son agence, son rôle et ses droits, puis activez-le.</span></div>
+      ${(S.agences || []).map(g => {
+        const list = S.team.filter(t => (t.agence_id || mainAgence().id) === g.id);
+        return list.length ? section(esc(g.name), `<div class="list">${list.map(t => `<button class="row" data-prof="${t.id}">
+          <div class="ico ${t.role !== 'agent' ? 'rc' : 'neu'}">${esc(initials(t.full_name))}</div>
+          <div class="main"><div class="t">${esc(t.full_name)} ${t.active ? '' : '<span class="tag amber">À activer</span>'}</div>
+            <div class="s">${esc(roleLabel(t.role))} · identifiant « ${esc(t.login || '')} »${t.role === 'agent' ? ` · ${[t.can_caisse && 'caisse', t.can_recharge && 'recharges'].filter(Boolean).join(' + ') || 'aucun droit'}` : ''}</div></div>${icon('chev')}</button>`).join('')}</div>`) : '';
+      }).join('')}`;
     m.querySelectorAll('[data-prof]').forEach(b => b.onclick = () => sheetProfile(S.team.find(t => t.id === b.dataset.prof)));
   }
 
@@ -1773,7 +1905,8 @@
     sheet({
       title: t.full_name || 'Utilisateur',
       body: `${field('Nom affiché', `<input class="input" name="full_name" value="${esc(t.full_name)}">`)}
-        ${field('Rôle', `<select class="input" name="role">${options([['agent', 'Agent'], ['gerante', 'Gérante (voit tout, valide, corrige)']], t.role)}</select>`)}
+        ${field('Agence', `<select class="input" name="agence">${options((S.agences || []).map(g => [g.id, g.name]), t.agence_id || mainAgence().id)}</select>`)}
+        ${field('Rôle', `<select class="input" name="role">${options([['agent', 'Agent'], ['gerant', 'Gérant(e) d’agence (gère son agence)'], ['gerante', 'Direction (voit toutes les agences, règle tout)']], t.role)}</select>`)}
         <label class="check"><input type="checkbox" name="active" ${t.active ? 'checked' : ''}> Compte actif (peut se connecter)</label>
         <label class="check"><input type="checkbox" name="can_caisse" ${t.can_caisse ? 'checked' : ''}> Droit : opérations de caisse</label>
         <label class="check"><input type="checkbox" name="can_recharge" ${t.can_recharge ? 'checked' : ''}> Droit : recharges de cartes</label>
@@ -1781,7 +1914,7 @@
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
-          await rpc('save_profile', { id: t.id, full_name: c.q('[name=full_name]').value, role: c.q('[name=role]').value,
+          await rpc('save_profile', { id: t.id, full_name: c.q('[name=full_name]').value, role: c.q('[name=role]').value, agence_id: Number(c.q('[name=agence]').value),
             active: c.q('[name=active]').checked, can_caisse: c.q('[name=can_caisse]').checked, can_recharge: c.q('[name=can_recharge]').checked });
           c.close(); toast('Enregistré.', 'ok'); await loadBoot(); route();
         });
@@ -1797,7 +1930,7 @@
       if (!list.length) return '';
       return section(l, `<div class="list">${list.map(a => `<button class="row" data-accedit="${a.id}">
         <div class="ico ${k === 'gtp' ? 'rc' : 'neu'}">${k === 'gtp' ? esc((a.bank || '?').slice(0, 3)) : icon(k === 'caisse' ? 'cash' : 'bank')}</div>
-        <div class="main"><div class="t">${esc(a.name)} ${a.active ? '' : '<span class="tag">désactivé</span>'}</div>
+        <div class="main"><div class="t">${esc(a.name)} ${a.active ? '' : '<span class="tag">désactivé</span>'} ${(S.agences || []).length > 1 ? `<span class="tag ${a.agence_id ? '' : 'brand'}">${esc(a.agence_id ? agName(a.agence_id) : 'Commun')}</span>` : ''}</div>
           <div class="s">${k === 'gtp' ? esc(commRule(a)) : esc(ACCOUNT_KIND[k])}${Number(a.low_alert) ? ' · alerte sous ' + fmt(a.low_alert) : ''}${a.note ? ' · ' + esc(a.note) : ''}</div></div>${icon('chev')}</button>`).join('')}</div>`);
     }).join('') + `<button class="btn block" id="newacc">${icon('plus')} Nouveau compte</button>`;
     m.querySelectorAll('[data-accedit]').forEach(b => b.onclick = () => sheetAccountEdit(acc(b.dataset.accedit)));
@@ -1810,6 +1943,8 @@
       title: a ? 'Modifier le compte' : 'Nouveau compte',
       body: `${field('Nom', `<input class="input" name="name" value="${esc(x.name || '')}">`)}
         ${field('Type', `<select class="input" name="kind" ${a && a.kind === 'caisse' ? 'disabled' : ''}>${options(Object.entries(ACCOUNT_KIND).filter(([k]) => k !== 'caisse' || x.kind === 'caisse'), x.kind)}</select>`)}
+        ${field('Agence', `<select class="input" name="agence" ${a && a.kind === 'caisse' ? 'disabled' : ''}>${options([['', 'Commun à toutes les agences'], ...(S.agences || []).map(g => [g.id, g.name])], x.agence_id || '')}</select>`,
+          'Commun : utilisable par toutes les agences (GTP, Wave, Orange Money, RIA, Western Union…). Sinon : propre à une agence (son Mixx, son Flooz, son coffre).')}
         <div id="gtpf">
           ${field('Banque', `<input class="input" name="bank" value="${esc(x.bank || '')}" placeholder="GTCO, UBA, ECOBANK, BNIFIC" style="text-transform:uppercase">`, 'Les cartes sont rattachées à la banque.')}
           <div class="grid2">${field('Commission (%)', `<input class="input" name="comm_rate" inputmode="decimal" value="${esc(String(x.comm_rate).replace('.', ','))}">`)}
@@ -1830,7 +1965,8 @@
           comm_rate: dec('comm_rate'), comm_divisor: dec('comm_divisor') || 1, comm_min: parseAmt(c.q('[name=comm_min]').value) || 0,
           comm_rounding: c.q('[name=comm_rounding]').value, low_alert: parseAmt(c.q('[name=low_alert]').value) || 0,
           allow_negative: c.q('[name=allow_negative]').checked, active: c.q('[name=active]').checked,
-          sort: Number(c.q('[name=sort]').value) || 100, note: c.q('[name=note]').value });
+          sort: Number(c.q('[name=sort]').value) || 100, note: c.q('[name=note]').value,
+          agence_id: c.q('[name=agence]').value ? Number(c.q('[name=agence]').value) : null });
         const upd = () => {
           const v = read();
           c.q('#gtpf').classList.toggle('hidden', v.kind !== 'gtp');
@@ -1840,6 +1976,46 @@
         upd();
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
           await rpc('save_account', read()); c.close(); toast('Compte enregistré.', 'ok'); await loadBoot(); route();
+        });
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------- agences (direction)
+  async function vAgences(m) {
+    await loadBoot();
+    const d = await rpc('dashboard', { agence_id: null });
+    const lia = new Map((d.liaisons || []).map(l => [l.agence_id, l]));
+    m.innerHTML = `
+      <div class="alert info"><span>L’agence principale dirige. Les autres agences ont leur coffre, leurs caisses et leurs comptes propres (Mixx, Flooz…) ; les comptes communs (GTP, Wave, Orange Money, RIA, Western Union) appartiennent à l’agence principale. Chaque agence a un solde avec la principale, mis à jour automatiquement.</span></div>
+      <div class="list">${(S.agences || []).map(g => {
+        const n = S.team.filter(t => (t.agence_id || mainAgence().id) === g.id && t.active).length;
+        const l = lia.get(g.id), x = l ? liaisonText(l) : null;
+        return `<button class="row" data-agedit="${g.id}">
+          <div class="ico ${g.is_main ? 'rc' : 'neu'}">${esc(initials(g.name))}</div>
+          <div class="main"><div class="t">${esc(g.name)} ${g.is_main ? '<span class="tag brand">Principale</span>' : ''} ${g.active ? '' : '<span class="tag">fermée</span>'}</div>
+            <div class="s">${n} personne(s) active(s)${x ? ' · ' + esc(x.t) : ''}</div></div>${icon('chev')}</button>`;
+      }).join('')}</div>
+      <button class="btn block" id="newag" style="margin-top:12px">${icon('plus')} Nouvelle agence</button>`;
+    m.querySelectorAll('[data-agedit]').forEach(b => b.onclick = () => sheetAgence((S.agences || []).find(g => g.id === Number(b.dataset.agedit))));
+    m.querySelector('#newag').onclick = () => sheetAgence(null);
+  }
+
+  function sheetAgence(g) {
+    sheet({
+      title: g ? g.name : 'Nouvelle agence',
+      body: `${field('Nom de l’agence', `<input class="input autofocus" name="name" value="${esc(g ? g.name : '')}" placeholder="ex. Noépé">`)}
+        ${g && !g.is_main ? `<label class="check"><input type="checkbox" name="active" ${g.active ? 'checked' : ''}> Agence ouverte</label>` : ''}
+        ${g ? '' : '<p class="small muted">Un coffre est créé automatiquement pour la nouvelle agence. Ensuite : créez ses comptes propres (Mixx, Flooz…) dans « Comptes », et rattachez son gérant et ses agents dans « Équipe ».</p>'}
+        ${g && !g.is_main ? '<button class="btn block" data-x="lia" type="button" style="margin-top:8px">Voir le solde avec l’agence principale</button>' : ''}`,
+      foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
+      onMount(c) {
+        const lb = c.q('[data-x=lia]'); if (lb) lb.onclick = () => { c.close(); sheetLiaison(g.id); };
+        c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          const p = { id: g ? g.id : null, name: c.q('[name=name]').value };
+          if (c.q('[name=active]')) p.active = c.q('[name=active]').checked;
+          await rpc('save_agence', p);
+          c.close(); toast(g ? 'Agence enregistrée.' : 'Agence créée.', 'ok'); await loadBoot(); renderShell(); route();
         });
       },
     });
@@ -1883,8 +2059,8 @@
     const demo = S.api.mode === 'demo';
     sheet({
       title: 'Mon compte',
-      body: `<dl class="kv"><dt>Nom</dt><dd>${esc(S.me.full_name)}</dd><dt>Rôle</dt><dd>${isG() ? 'Gérante' : 'Agent'}</dd><dt>Identifiant</dt><dd>${esc(S.me.login || '')}</dd>
-          ${!isG() ? `<dt>Droits</dt><dd>${[S.me.can_caisse && 'caisse', S.me.can_recharge && 'recharges'].filter(Boolean).join(', ') || 'aucun'}</dd>` : ''}</dl>
+      body: `<dl class="kv"><dt>Nom</dt><dd>${esc(S.me.full_name)}</dd><dt>Rôle</dt><dd>${esc(roleLabel(S.me.role))}</dd>${S.me.agence ? `<dt>Agence</dt><dd>${esc(S.me.agence)}</dd>` : ''}<dt>Identifiant</dt><dd>${esc(S.me.login || '')}</dd>
+          ${!isMgr() ? `<dt>Droits</dt><dd>${[S.me.can_caisse && 'caisse', S.me.can_recharge && 'recharges'].filter(Boolean).join(', ') || 'aucun'}</dd>` : ''}</dl>
         ${!demo ? `<div style="margin-top:18px">${field('Nouveau mot de passe', '<input class="input" type="password" name="pwd" minlength="6" autocomplete="new-password">')}
           <button class="btn block" data-x="pwd">Changer mon mot de passe</button></div>` : ''}
         ${demo ? '<button class="btn block" data-x="reset" style="margin-top:18px">Réinitialiser la démo</button>' : ''}`,
@@ -2186,17 +2362,18 @@
     journal: { title: 'Journal', render: vJournal, live: true, refresh: () => loadJournal() },
     clients: { title: 'Clients', render: vClients },
     cloture: { title: 'Clôture du soir', render: vCloture },
-    tableau: { title: 'Tableau de bord', render: vTableau, live: true, gerante: true },
-    clotures: { title: 'Clôtures', render: vClotures, live: true, gerante: true },
-    plus: { title: 'Plus', render: vPlus, gerante: true },
-    rapports: { title: 'Rapports', render: vRapports, gerante: true },
-    cartes: { title: 'Cartes clients', render: vCartes, gerante: true },
-    doublons: { title: 'Clients en double', render: vDoublons, gerante: true },
+    tableau: { title: 'Tableau de bord', render: vTableau, live: true, mgr: true },
+    clotures: { title: 'Clôtures', render: vClotures, live: true, mgr: true },
+    plus: { title: 'Plus', render: vPlus, mgr: true },
+    rapports: { title: 'Rapports', render: vRapports, mgr: true },
+    cartes: { title: 'Cartes clients', render: vCartes, mgr: true },
+    doublons: { title: 'Clients en double', render: vDoublons, dir: true },
     commissions: { title: 'Commissions à vérifier', render: vCommissions, need: 'can_recharge' },
-    equipe: { title: 'Équipe', render: vEquipe, live: true, gerante: true },
-    comptes: { title: 'Comptes et commissions', render: vComptes, gerante: true },
-    produits: { title: 'Produits de caisse', render: vProduits, gerante: true },
-    import: { title: 'Importer depuis Excel', render: vImport, gerante: true },
+    equipe: { title: 'Équipe', render: vEquipe, live: true, dir: true },
+    comptes: { title: 'Comptes et commissions', render: vComptes, dir: true },
+    produits: { title: 'Produits de caisse', render: vProduits, dir: true },
+    import: { title: 'Importer depuis Excel', render: vImport, dir: true },
+    agences: { title: 'Agences', render: vAgences, live: true, dir: true },
   };
 
   // Après une saisie : mise à jour immédiate de l'écran (sans attendre le signal temps réel).
@@ -2219,21 +2396,23 @@
     transfert: () => sheetTransfert(),
     ajust: () => sheetAjust(),
     export: () => sheetExport(),
+    reversement: () => sheetReversement(),
     company: () => sheetCompany(),
     me: () => sheetMe(),
     newcard: () => sheetCard(null, {}),
   };
 
   document.addEventListener('click', e => {
-    const t = e.target.closest('[data-do],[data-op],[data-acc],[data-client],[data-cardedit],[data-go]');
+    const t = e.target.closest('[data-do],[data-op],[data-acc],[data-client],[data-cardedit],[data-go],[data-liaison]');
     if (!t) return;
     const d = t.dataset;
     if (t.tagName === 'A' && (d.do || d.go)) e.preventDefault();
     if (d.go) { if (location.hash === '#/' + d.go) route(); else location.hash = '#/' + d.go; return; }
     if (d.op) return opDetail(Number(d.op));
-    if (d.acc) return isG() && sheetAccountView(Number(d.acc));
+    if (d.liaison) return sheetLiaison(Number(d.liaison));
+    if (d.acc) return isMgr() && sheetAccountView(Number(d.acc));
     if (d.client) { const c = S.clients.get(Number(d.client)); return c && sheetClient(c); }
-    if (d.cardedit) { const c = S.cards.get(Number(d.cardedit)); return c && sheetCard(c, { onRecharge: (S.me.can_recharge || isG()) ? venteForCard : null }); }
+    if (d.cardedit) { const c = S.cards.get(Number(d.cardedit)); return c && sheetCard(c, { onRecharge: (S.me.can_recharge || isMgr()) ? venteForCard : null }); }
     if (d.do && DO[d.do]) DO[d.do](t);
   });
   // Toucher l'onglet déjà ouvert le recharge.
