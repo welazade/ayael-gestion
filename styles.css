@@ -199,6 +199,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .tabbar a.plus span.round svg { width: 26px; height: 26px; }
 .tabbar a.plus { color: var(--brand-ink); }
 .newop { display: none; }
+.agsel { width: auto; max-width: 170px; min-height: 36px; padding: 4px 8px; font-size: 14px; border-radius: 10px; flex: none; }
+.agtag { flex: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 420px) { .topbar .live { display: none; } .agsel { max-width: 130px; } }
 .hero-cta { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 64px; border: 0; border-radius: var(--radius);
   background: var(--brand); color: #fff; font-size: 18px; font-weight: 700; cursor: pointer; margin-bottom: 16px; box-shadow: 0 4px 14px rgba(229,43,47,.25); }
 .hero-cta svg { width: 26px; height: 26px; }

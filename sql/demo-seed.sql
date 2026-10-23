@@ -46,4 +46,27 @@ select op_vente(jsonb_build_object(
                        'gtp_id', (select id from accounts where name = 'GTCO principal'), 'amount', 42000),
     jsonb_build_object('type', 'caisse', 'product_id', (select id from products where name = 'Crédit de communication'), 'amount', 2000, 'details', 'Moov'))));
 
+-- Deuxième agence : Noépé, avec son gérant, son agent et son propre compte Mixx.
+select set_config('app.uid', '00000000-0000-0000-0000-000000000001', false);
+select save_agence('{"name":"Noépé"}');
+insert into auth.users(id, email, raw_user_meta_data) values
+  ('00000000-0000-0000-0000-000000000004', 'gerant.noepe@ayael.app', '{"full_name":"Gérant Noépé (démo)"}'),
+  ('00000000-0000-0000-0000-000000000005', 'agent.noepe@ayael.app',  '{"full_name":"Agent Noépé (démo)"}')
+on conflict do nothing;
+select save_profile(jsonb_build_object('id', '00000000-0000-0000-0000-000000000004', 'role', 'gerant', 'active', true,
+                                       'agence_id', (select id from agences where name = 'Noépé')));
+select save_profile(jsonb_build_object('id', '00000000-0000-0000-0000-000000000005', 'role', 'agent', 'active', true,
+                                       'agence_id', (select id from agences where name = 'Noépé')));
+select save_account(jsonb_build_object('name', 'Mixx Noépé', 'kind', 'electronique', 'agence_id', (select id from agences where name = 'Noépé')));
+select op_ajustement(jsonb_build_object('account_id', (select id from accounts where name = 'Mixx Noépé'), 'target', 200000, 'details', 'Solde d''ouverture (démo)'));
+select op_ajustement(jsonb_build_object('account_id', (select id from accounts where agent_id = '00000000-0000-0000-0000-000000000005'),
+                                        'target', 30000, 'details', 'Fond de caisse (démo)'));
+-- À Noépé : une recharge payée en espèces (Noépé doit 25 000) et un retrait RIA (la principale doit 10 000).
+select set_config('app.uid', '00000000-0000-0000-0000-000000000005', false);
+select op_vente(jsonb_build_object('client_id', (select id from clients where name = 'OLADELE RACHIDE TCHALA'), 'received', 25000,
+  'lines', jsonb_build_array(jsonb_build_object('type', 'recharge', 'card_id', (select id from cards where card_number = '5027504'),
+                                                'gtp_id', (select id from accounts where name = 'GTCO principal'), 'amount', 25000))));
+select op_vente(jsonb_build_object('client_name', 'Client de passage',
+  'lines', jsonb_build_array(jsonb_build_object('type', 'caisse', 'product_id', (select id from products where name = 'Retrait RIA'), 'amount', 10000, 'details', 'MTCN 1234567890'))));
+
 select set_config('app.uid', '', false);
