@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '5';
+  const DEMO_SCHEMA_VERSION = '7';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -60,6 +60,7 @@
   const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f(...a), ms); }; };
   const isG = () => S.me && S.me.role === 'gerante';
   const acc = id => S.accounts.find(a => a.id === Number(id));
+  const activeCards = c => ((c && c.cards) || []).filter(k => k.active !== false);
   const initials = n => String(n || '?').replace(/\(.*?\)/g, ' ').split(/[^A-Za-zÀ-ÿ0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
   const rpc = (n, p) => S.api.rpc(n, p || {});
   function period(key) {
@@ -506,7 +507,7 @@
   // Menu latéral (ordinateur)
   function navItems() {
     if (isG()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
-      ['rapports', 'Rapports', 'chart'], 'Réglages', ['cartes', 'Cartes clients', 'card'], ['equipe', 'Équipe', 'user'], ['comptes', 'Comptes et commissions', 'bank'],
+      ['rapports', 'Rapports', 'chart'], 'Réglages', ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'], ['equipe', 'Équipe', 'user'], ['comptes', 'Comptes et commissions', 'bank'],
       ['produits', 'Produits de caisse', 'tag'], ['import', 'Importer depuis Excel', 'upload'], ['plus', 'Autres réglages', 'grid']];
     return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['cloture', 'Clôture du soir', 'lock']];
   }
@@ -739,7 +740,7 @@
       if (st.client) {
         const cl = st.client;
         box.innerHTML = `<div class="clientcard"><div class="ico rc">${esc(initials(cl.name))}</div>
-          <div class="main"><div class="t">${esc(cl.name)}</div><div class="s">${esc([cl.phone, cl.cards && cl.cards.length ? cl.cards.length + ' carte(s)' : 'aucune carte'].filter(Boolean).join(' · '))}</div></div>
+          <div class="main"><div class="t">${esc(cl.name)}</div><div class="s">${esc([cl.phone, activeCards(cl).length ? activeCards(cl).length + ' carte(s) active(s)' : 'aucune carte active'].filter(Boolean).join(' · '))}</div></div>
           <button class="btn small" type="button" id="vchg">Changer</button></div>`;
         $('#vchg').onclick = () => { st.client = null; drawClient(); drawFields(); $('#vcq').focus(); };
         return;
@@ -762,7 +763,7 @@
         const res = await rpc('search_clients', { q, limit: 8 });
         if (inp.value.trim() !== q) return;
         res.forEach(x => S.clients.set(x.id, x));
-        opts = res.map(x => ({ t: esc(x.name), s: esc([x.phone, ...(x.cards || []).map(k => `${k.bank} ${k.card_number}`)].filter(Boolean).join(' · ')) || 'pas de carte',
+        opts = res.map(x => ({ t: esc(x.name), s: esc([x.phone, ...activeCards(x).map(k => `${k.bank} ${k.card_number}`)].filter(Boolean).join(' · ')) || 'pas de carte active',
           go: () => { st.client = x; st.passName = ''; drawClient(); drawFields(); $('#vprod').focus(); } }));
         opts.push({ t: `＋ Créer le client « ${esc(q.toUpperCase())} »`, s: 'Nouvelle fiche client (nom, téléphone)',
           go: () => sheetClientEdit({ name: q }, saved => { st.client = saved; drawClient(); drawFields(); $('#vprod').focus(); }) });
@@ -789,7 +790,7 @@
       const addBtn = `<button class="btn block" type="button" id="vadd">${icon('plus')} Ajouter à l’opération <span class="kbd only-desktop">Entrée</span></button>`;
       if (st.sel === 'R') {
         if (!st.client) { box.innerHTML = '<div class="alert info">Pour une recharge, choisissez d’abord le client (ou créez sa fiche) dans la case « Client ».</div>'; return; }
-        const cards = st.client.cards || [];
+        const cards = activeCards(st.client);
         if (!cards.length) {
           box.innerHTML = `<div class="alert info">Ce client n’a pas encore de carte enregistrée.</div><button class="btn block" type="button" id="vnewcard">${icon('plus')} Ajouter sa carte</button>`;
           $('#vnewcard').onclick = addCard; return;
@@ -1020,7 +1021,7 @@
       box.innerHTML = res.length ? `<div class="list">${res.map(x => `<button class="row" data-client="${x.id}">
           <div class="ico rc">${esc(initials(x.name))}</div>
           <div class="main"><div class="t">${esc(x.name)}</div>
-            <div class="s">${esc([x.phone, (x.cards || []).map(k => `${k.bank} ${k.card_number}`).join(', ') || 'pas de carte'].filter(Boolean).join(' · '))}${x.last_at ? ' · dernière visite ' + ago(x.last_at) : ''}</div></div>${icon('chev')}</button>`).join('')}</div>
+            <div class="s">${esc([x.phone, activeCards(x).map(k => `${k.bank} ${k.card_number}`).join(', ') || 'pas de carte active'].filter(Boolean).join(' · '))}${x.last_at ? ' · dernière visite ' + ago(x.last_at) : ''}</div></div>${icon('chev')}</button>`).join('')}</div>
           ${res.length >= 60 ? '<p class="small muted">60 premiers résultats : précisez la recherche.</p>' : ''}`
         : '<div class="list"><div class="empty">Aucun client trouvé.</div></div>';
     };
@@ -1036,7 +1037,7 @@
       title: cl.name, wide: true,
       body: `<div class="cols"><div>
           <dl class="kv"><dt>Téléphone</dt><dd>${esc(cl.phone || '—')}</dd>${cl.note ? `<dt>Note</dt><dd>${esc(cl.note)}</dd>` : ''}<dt>Opérations</dt><dd>${hist.filter(o => o.status === 'ok').length}${hist.length >= 40 ? '+' : ''}</dd></dl>
-          ${section('Cartes', `<div class="list">${(cl.cards || []).map(k => `<div class="row"><div class="ico rc">${esc(k.bank.slice(0, 3))}</div><div class="main"><div class="t">${esc(k.card_number)}</div><div class="s">${esc(k.bank)}${k.holder_name !== cl.name ? ' · titulaire ' + esc(k.holder_name) : ''}</div></div></div>`).join('') || '<div class="empty">Aucune carte.</div>'}</div>
+          ${section('Cartes', `<div class="list">${(cl.cards || []).map(k => `<div class="row"><div class="ico rc">${esc(k.bank.slice(0, 3))}</div><div class="main"><div class="t" style="${k.active === false ? 'text-decoration:line-through;color:var(--muted)' : ''}">${esc(k.card_number)}${k.active === false ? ' <span class="tag">inactive</span>' : ''}</div><div class="s">${esc(k.bank)}${k.holder_name !== cl.name ? ' · titulaire ' + esc(k.holder_name) : ''}${k.note ? ' · ' + esc(k.note) : ''}</div></div></div>`).join('') || '<div class="empty">Aucune carte.</div>'}</div>
             <button class="btn block small" data-x="card" style="margin-top:8px">${icon('plus')} Ajouter une carte</button>`)}
         </div><div>${section('Historique', opList(hist, isG(), 'Aucune opération.'))}</div></div>`,
       foot: `<button class="btn" data-x="edit">Modifier la fiche</button><button class="btn primary" data-x="op">${icon('plus')} Nouvelle opération</button>`,
@@ -1474,6 +1475,7 @@
     m.innerHTML = `
       ${section('Suivi', `<div class="list">
         ${item('#/clients', 'users', 'Clients', 'Fiches clients, cartes, historique')}
+        ${item('#/doublons', 'users', 'Clients en double', 'Repérer et fusionner les fiches d’une même personne')}
         ${item('#/rapports', 'chart', 'Rapports', 'Par produit, par GTP, par agent, commissions par mois')}
         ${item('#/cartes', 'card', 'Cartes clients', 'Rechercher, corriger, ajouter')}
         <button class="row" data-do="export"><div class="ico neu">${icon('download')}</div><div class="main"><div class="t">Exporter en Excel</div><div class="s">Sauvegarde de toutes les opérations d’une période</div></div>${icon('chev')}</button>
@@ -1524,6 +1526,117 @@
   }
 
   // ---------------------------------------------------------------- cartes clients
+  // ---------------------------------------------------------------- clients en double
+  function lev(a, b) {
+    if (a === b) return 0;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  // Ressemblance de deux noms, de 0 (rien à voir) à 1 (identiques, quel que soit l'ordre des mots).
+  function nameSimilarity(a, b) {
+    const n = s => norm(s).replace(/[^A-Z0-9]+/g, ' ').trim().split(' ').filter(Boolean).sort().join(' ');
+    const x = n(a), y = n(b);
+    if (!x || !y) return 0;
+    if (x === y) return 1;
+    return 1 - lev(x, y) / Math.max(x.length, y.length);
+  }
+  const bestKeep = list => list.slice().sort((a, b) => (b.cards.length + Number(b.n_ops)) - (a.cards.length + Number(a.n_ops)) || b.name.length - a.name.length || a.id - b.id)[0];
+
+  async function vDoublons(m) {
+    const raw = await rpc('find_duplicates', { limit: 1000 });
+    const ignored = new Set(S.settings.dup_ignored || []);
+    const seen = new Set(), groups = [];
+    for (const g of raw) {
+      const sig = g.clients.map(c => c.id).sort((a, b) => a - b).join('-');
+      if (seen.has(sig) || ignored.has(sig)) continue;
+      seen.add(sig);
+      let sim = 1;
+      g.clients.forEach(c => g.clients.forEach(d => { if (c.id < d.id) sim = Math.min(sim, nameSimilarity(c.name, d.name)); }));
+      // Téléphones différents = peut-être deux personnes qui portent le même nom.
+      const conflict = new Set(g.clients.map(c => String(c.phone || '').replace(/\D/g, '')).filter(Boolean)).size > 1;
+      groups.push({ sig, key: g.key, clients: g.clients, sim, conflict, evident: sim >= 0.85 && !conflict });
+    }
+    groups.sort((a, b) => (b.evident - a.evident) || (a.conflict - b.conflict) || (b.sim - a.sim));
+    let shown = 40;
+    const groupHtml = g => {
+      const keep = bestKeep(g.clients);
+      const tag = g.evident ? '<span class="tag green">Même personne très probable</span>'
+        : g.conflict && g.sim >= 0.85 ? '<span class="tag amber">Même nom, mais téléphones différents : vérifiez</span>'
+        : g.sim >= 0.6 ? '<span class="tag amber">Noms proches : vérifiez</span>' : '<span class="tag red">Noms différents : sans doute pas la même personne</span>';
+      const preCheck = g.evident || (g.sim >= 0.6 && !g.conflict);
+      const why = g.key.startsWith('tel:') ? `même téléphone (${esc(g.clients.find(c => c.phone)?.phone || '')})` : 'même nom, mots dans un autre ordre';
+      return `<div class="card pad" style="margin-bottom:10px" data-group="${g.sig}">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">${tag}<span class="small muted">${why}</span></div>
+        <div class="dtable scrollx"><table><thead><tr><th>Garder</th><th>Fusionner</th><th>Nom</th><th>Téléphone</th><th>Cartes</th><th class="r">Opér.</th></tr></thead><tbody>
+          ${g.clients.map(c => `<tr style="cursor:default">
+            <td><input type="radio" name="k-${g.sig}" value="${c.id}" ${c.id === keep.id ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--brand)"></td>
+            <td><input type="checkbox" data-merge="${c.id}" ${c.id !== keep.id && preCheck ? 'checked' : ''} ${c.id === keep.id ? 'disabled' : ''} style="width:20px;height:20px;accent-color:var(--brand)"></td>
+            <td style="font-weight:600">${esc(c.name)}<div class="sub">fiche n° ${c.id}</div></td>
+            <td class="num">${esc(c.phone || '')}</td>
+            <td class="sub">${c.cards.map(k => `<span style="${k.active ? '' : 'text-decoration:line-through'}">${esc(k.bank)} ${esc(k.card_number)}</span>`).join('<br>') || '—'}</td>
+            <td class="r num">${c.n_ops}</td></tr>`).join('')}</tbody></table></div>
+        <div class="grid2" style="margin-top:10px"><button class="btn small" data-ignore="${g.sig}">Pas la même personne</button><button class="btn small primary" data-domerge="${g.sig}">Fusionner</button></div></div>`;
+    };
+    const draw = () => {
+      const left = groups.filter(g => !g.done);
+      m.innerHTML = `
+        <div class="alert info"><span>Fiches qui ont le même téléphone, ou le même nom écrit dans un autre ordre. Pour chaque groupe : choisissez la fiche à <b>garder</b>, cochez celles à <b>fusionner</b> dedans. Leurs cartes et leur historique passent sur la fiche gardée ; les autres fiches sont désactivées (rien n’est effacé).</span></div>
+        ${left.length ? `<p><b>${left.length}</b> groupe(s) à vérifier, dont <b>${left.filter(g => g.evident).length}</b> où il s’agit très probablement de la même personne (noms presque identiques, téléphones qui concordent).</p>
+          ${left.some(g => g.evident) ? `<button class="btn primary block" id="dauto" style="margin-bottom:16px">Fusionner d’un coup les ${left.filter(g => g.evident).length} groupes évidents</button>` : ''}
+          ${left.slice(0, shown).map(groupHtml).join('')}
+          ${left.length > shown ? `<button class="btn block" id="dmore">Afficher la suite (${left.length - shown} groupes)</button>` : ''}`
+          : '<div class="list"><div class="empty">Aucun doublon à vérifier. 👍</div></div>'}`;
+      m.querySelectorAll('[data-group]').forEach(el => {
+        const sig = el.dataset.group, g = groups.find(x => x.sig === sig);
+        el.querySelectorAll('input[type=radio]').forEach(r => r.onchange = () => {
+          el.querySelectorAll('[data-merge]').forEach(cb => { const isKeep = cb.dataset.merge === r.value; cb.disabled = isKeep; if (isKeep) cb.checked = false; });
+        });
+        el.querySelector('[data-domerge]').onclick = e => busy(e.currentTarget, async () => {
+          const keepId = Number(el.querySelector('input[type=radio]:checked').value);
+          const ids = [...el.querySelectorAll('[data-merge]:checked')].map(cb => Number(cb.dataset.merge)).filter(id => id !== keepId);
+          if (!ids.length) throw new Error('Cochez au moins une fiche à fusionner.');
+          await rpc('merge_clients', { keep_id: keepId, merge_ids: ids });
+          toast(`${ids.length + 1} fiches regroupées.`, 'ok');
+          route(); // recharge la liste : une fiche peut figurer dans plusieurs groupes
+        });
+        el.querySelector('[data-ignore]').onclick = e => busy(e.currentTarget, async () => {
+          const list = [...(S.settings.dup_ignored || []), sig];
+          await rpc('save_settings', { key: 'dup_ignored', value: list });
+          S.settings.dup_ignored = list; g.done = true; draw();
+        });
+      });
+      const more = m.querySelector('#dmore'); if (more) more.onclick = () => { shown += 40; draw(); };
+      const auto = m.querySelector('#dauto');
+      if (auto) auto.onclick = async () => {
+        const todo = groups.filter(g => !g.done && g.evident);
+        if (!await ask('Fusionner les groupes évidents ?', `<p>${todo.length} groupes « même personne très probable » (noms presque identiques, téléphones qui concordent) vont être regroupés. Dans chaque groupe, la fiche gardée est celle qui a le plus de cartes et d’opérations.</p><p>Les autres groupes ne sont pas touchés : vous les vérifierez un par un.</p>`, 'Fusionner')) return;
+        busy(auto, async () => {
+          let n = 0;
+          const moved = new Map();                       // fiche fusionnée -> fiche gardée
+          const resolve = id => { while (moved.has(id)) id = moved.get(id); return id; };
+          for (const g of todo) {
+            const keepId = resolve(bestKeep(g.clients).id);
+            const ids = [...new Set(g.clients.map(c => resolve(c.id)))].filter(id => id !== keepId);
+            g.done = true;
+            if (!ids.length) continue;
+            await rpc('merge_clients', { keep_id: keepId, merge_ids: ids });
+            ids.forEach(id => moved.set(id, keepId));
+            n++;
+            auto.textContent = `Fusion en cours… ${n} / ${todo.length}`;
+          }
+          toast(`${n} groupes fusionnés.`, 'ok');
+          route();
+        });
+      };
+    };
+    draw();
+  }
+
   async function vCartes(m) {
     const banks = [...new Set(S.accounts.filter(a => a.kind === 'gtp').map(a => a.bank).filter(Boolean))];
     m.innerHTML = `
@@ -1982,6 +2095,7 @@
     plus: { title: 'Plus', render: vPlus, gerante: true },
     rapports: { title: 'Rapports', render: vRapports, gerante: true },
     cartes: { title: 'Cartes clients', render: vCartes, gerante: true },
+    doublons: { title: 'Clients en double', render: vDoublons, gerante: true },
     equipe: { title: 'Équipe', render: vEquipe, live: true, gerante: true },
     comptes: { title: 'Comptes et commissions', render: vComptes, gerante: true },
     produits: { title: 'Produits de caisse', render: vProduits, gerante: true },
