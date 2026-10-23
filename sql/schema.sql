@@ -188,7 +188,21 @@ alter table operations add column if not exists agence_id bigint references agen
 alter table closings   add column if not exists agence_id bigint references agences(id);
 create index if not exists operations_agence_idx on operations(agence_id, op_day);
 alter table profiles drop constraint if exists profiles_role_check;
-alter table profiles add constraint profiles_role_check check (role in ('gerante','gerant','agent'));
+alter table profiles add constraint profiles_role_check check (role in ('gerante','gerant','sous_gerant','agent'));
+
+-- Droits cochés pour un(e) sous-gérant(e) (un gérant d'agence les a tous sur son agence).
+alter table profiles add column if not exists perm_appro        boolean not null default false;
+alter table profiles add column if not exists perm_produits     boolean not null default false;
+alter table profiles add column if not exists perm_ajust        boolean not null default false;
+alter table profiles add column if not exists perm_clotures     boolean not null default false;
+alter table profiles add column if not exists perm_fournisseurs boolean not null default false;
+
+-- Fournisseurs : un compte de type « fournisseur ». Solde négatif = ce que nous lui devons.
+alter table accounts drop constraint if exists accounts_kind_check;
+alter table accounts add constraint accounts_kind_check check (kind in ('gtp','electronique','caisse','coffre','banque','fournisseur'));
+alter table accounts add column if not exists phone text;
+alter table operations add column if not exists fournisseur_id bigint references accounts(id);
+create index if not exists operations_fournisseur_idx on operations(fournisseur_id, created_at desc);
 
 -- Mise en place des agences sur des données existantes (une seule fois).
 do $$
@@ -239,6 +253,30 @@ begin
   if need = 'manager' and r.role = 'agent' then raise exception 'Action réservée aux gérants.'; end if;
   if need = 'caisse' and r.role = 'agent' and not r.can_caisse then raise exception 'Vous n''avez pas le droit de saisir des opérations de caisse.'; end if;
   if need = 'recharge' and r.role = 'agent' and not r.can_recharge then raise exception 'Vous n''avez pas le droit de saisir des recharges.'; end if;
+  return r;
+end $$;
+
+-- Droit d'une personne : la direction et les gérants d'agence ont tout ; un sous-gérant ce qui est coché.
+create or replace function _can(me profiles, perm text) returns boolean
+language sql stable as $$
+  select case
+    when me.role in ('gerante','gerant') then true
+    when me.role = 'sous_gerant' then case perm
+      when 'appro' then me.perm_appro when 'produits' then me.perm_produits when 'ajust' then me.perm_ajust
+      when 'clotures' then me.perm_clotures when 'fournisseurs' then me.perm_fournisseurs else false end
+    else false end
+$$;
+
+create or replace function _require_perm(perm text) returns profiles
+language plpgsql security definer set search_path = public as $$
+declare r profiles;
+begin
+  r := _require(null);
+  if not _can(r, perm) then
+    raise exception 'Vous n''avez pas ce droit (%). Demandez à la direction.', case perm
+      when 'appro' then 'approvisionner' when 'produits' then 'produits' when 'ajust' then 'ajuster les soldes'
+      when 'clotures' then 'clôtures et rapports' when 'fournisseurs' then 'fournisseurs' else perm end;
+  end if;
   return r;
 end $$;
 
@@ -386,6 +424,7 @@ language sql stable security definer set search_path = public as $$
     'account2',     (select name from accounts where id = o.account2_id),
     'agent',        (select full_name from profiles where id = o.user_id),
     'cancelled_by_name', (select full_name from profiles where id = o.cancelled_by),
+    'fournisseur',  (select name from accounts where id = o.fournisseur_id),
     'client_name',  coalesce((select name from clients where id = o.client_id),
                              (select client_name from receipts where id = o.receipt_id))
   )
@@ -454,14 +493,14 @@ begin
     'accounts', (select coalesce(jsonb_agg(to_jsonb(a) order by a.sort, a.name), '[]') from accounts a
                   where me.role = 'gerante'
                      or (a.active and _acc_in(a, me.agence_id)
-                         and (me.role = 'gerant' or ((a.kind <> 'caisse' or a.agent_id = me.id) and a.kind <> 'coffre')))
+                         and (me.role in ('gerant','sous_gerant') or ((a.kind <> 'caisse' or a.agent_id = me.id) and a.kind <> 'coffre')))
                      -- un gérant voit aussi les comptes de l'agence principale où il peut reverser
-                     or (me.role = 'gerant' and a.active and a.agence_id = _main() and a.kind in ('coffre','electronique','banque'))),
+                     or (me.role in ('gerant','sous_gerant') and a.active and a.agence_id = _main() and a.kind in ('coffre','electronique','banque'))),
     'products', (select coalesce(jsonb_agg(to_jsonb(x) order by x.sort, x.name), '[]') from products x
                   where me.role = 'gerante' or x.active),
     'team', case when me.role = 'gerante' then
               (select coalesce(jsonb_agg(to_jsonb(t) order by t.role desc, t.full_name), '[]') from profiles t)
-                 when me.role = 'gerant' then
+                 when me.role in ('gerant','sous_gerant') then
               (select coalesce(jsonb_agg(to_jsonb(t) order by t.role desc, t.full_name), '[]') from profiles t where t.agence_id = me.agence_id)
             else '[]'::jsonb end,
     'agences', (select coalesce(jsonb_agg(to_jsonb(g) order by g.is_main desc, g.name), '[]') from agences g
@@ -517,6 +556,9 @@ begin
     'commissions_to_check', (select count(*) from operations
       where kind = 'recharge' and status = 'ok' and commission_status = 'estimee'
         and (mgr or user_id = me.id) and (ag is null or agence_id = ag)),
+    -- Total dû aux fournisseurs (pour qui a le droit « fournisseurs »)
+    'fournisseurs_du', case when _can(me, 'fournisseurs') then
+      (select coalesce(-sum(least(_bal(a.id), 0)), 0) from accounts a where a.kind = 'fournisseur' and a.active) end,
     -- Soldes entre chaque agence secondaire et l'agence principale
     'liaisons', case when mgr then (
       select coalesce(jsonb_agg(jsonb_build_object('agence_id', g.id, 'agence', g.name, 'balance', _liaison(g.id)) order by g.name), '[]')
@@ -690,22 +732,40 @@ begin
   return jsonb_build_object('ok', true, 'id', oid, 'balance', _bal(a.id));
 end $$;
 
--- Approvisionnement d'un compte GTP (gérante)
+-- Un compte de « mon » agence (pour un gérant / sous-gérant) : de son agence, ou commun s'il est à la principale.
+create or replace function _mine(me profiles, a accounts) returns boolean
+language sql stable as $$
+  select coalesce(me.role = 'gerante' or a.agence_id = me.agence_id or (a.agence_id is null and me.agence_id = _main()), false)
+$$;
+
+-- Approvisionnement d'un compte (GTP, Mixx, Flooz…), éventuellement acheté chez un fournisseur.
+-- p = {gtp_id (compte approvisionné), amount, source_id?, fournisseur_id?, details}
+-- source = un fournisseur → achat à crédit (on lui doit) ; source = coffre/caisse/banque → payé comptant.
 create or replace function op_approvisionnement(p jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare me profiles; g accounts; src accounts; amt numeric := _num(p,'amount'); oid bigint;
+declare me profiles; g accounts; src accounts; f accounts; amt numeric := _num(p,'amount'); oid bigint;
 begin
-  me := _require('gerante');
+  me := _require_perm('appro');
   select * into g from accounts where id = _num(p,'gtp_id')::bigint;
-  if g.id is null then raise exception 'Choisissez le compte à approvisionner.'; end if;
+  if g.id is null or g.kind = 'fournisseur' then raise exception 'Choisissez le compte à approvisionner.'; end if;
+  if not _mine(me, g) then raise exception 'Vous ne pouvez approvisionner que les comptes de votre agence.'; end if;
   if amt is null or amt <= 0 then raise exception 'Montant invalide.'; end if;
+  if _num(p,'fournisseur_id') is not null then
+    select * into f from accounts where id = _num(p,'fournisseur_id')::bigint and kind = 'fournisseur';
+    if f.id is null then raise exception 'Fournisseur introuvable.'; end if;
+  end if;
   if _num(p,'source_id') is not null then
     select * into src from accounts where id = _num(p,'source_id')::bigint;
-    if src.id = g.id then raise exception 'La source doit être différente du compte approvisionné.'; end if;
-    perform _check_funds(src, amt);
+    if src.id is null or src.id = g.id then raise exception 'La source doit être différente du compte approvisionné.'; end if;
+    if src.kind = 'fournisseur' then
+      f := src;                                    -- achat à crédit chez ce fournisseur
+    else
+      if not _mine(me, src) then raise exception 'L''argent doit venir d''un compte de votre agence.'; end if;
+      perform _check_funds(src, amt);
+    end if;
   end if;
-  insert into operations(user_id, kind, account_id, account2_id, amount, details)
-  values (me.id, 'approvisionnement', g.id, src.id, amt, _txt(p,'details')) returning id into oid;
+  insert into operations(user_id, kind, account_id, account2_id, amount, details, fournisseur_id)
+  values (me.id, 'approvisionnement', g.id, src.id, amt, _txt(p,'details'), f.id) returning id into oid;
   insert into movements(operation_id, account_id, amount) values (oid, g.id, amt);
   if src.id is not null then insert into movements(operation_id, account_id, amount) values (oid, src.id, -amt); end if;
   perform _log('operations');
@@ -718,11 +778,13 @@ language plpgsql security definer set search_path = public as $$
 declare me profiles; a accounts; b accounts; amt numeric := _num(p,'amount'); oid bigint;
 begin
   me := _require('manager');
+  if me.role = 'sous_gerant' and not _can(me, 'appro') then raise exception 'Vous n''avez pas le droit de faire des transferts.'; end if;
   select * into a from accounts where id = _num(p,'from_id')::bigint;
   select * into b from accounts where id = _num(p,'to_id')::bigint;
   if a.id is null or b.id is null or a.id = b.id then raise exception 'Choisissez deux comptes différents.'; end if;
+  if a.kind = 'fournisseur' or b.kind = 'fournisseur' then raise exception 'Pour un fournisseur, utilisez « Payer un fournisseur » ou « Approvisionner ».'; end if;
   -- Un gérant d'agence transfère depuis un compte de son agence, vers son agence ou l'agence principale.
-  if me.role = 'gerant' then
+  if me.role in ('gerant','sous_gerant') then
     if a.agence_id is distinct from me.agence_id then
       raise exception 'Vous ne pouvez transférer que depuis un compte de votre agence.';
     end if;
@@ -745,10 +807,10 @@ create or replace function op_ajustement(p jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare me profiles; a accounts; amt numeric; motif text := _txt(p,'details'); oid bigint;
 begin
-  me := _require('manager');
+  me := _require_perm('ajust');
   select * into a from accounts where id = _num(p,'account_id')::bigint;
   if a.id is null then raise exception 'Compte introuvable.'; end if;
-  if me.role = 'gerant' and a.agence_id is distinct from me.agence_id then
+  if me.role in ('gerant','sous_gerant') and a.agence_id is distinct from me.agence_id then
     raise exception 'Vous ne pouvez ajuster que les comptes de votre agence.';
   end if;
   if motif is null then raise exception 'Le motif de l''ajustement est obligatoire.'; end if;
@@ -772,7 +834,7 @@ begin
   if o.id is null then raise exception 'Opération introuvable.'; end if;
   if o.status <> 'ok' then raise exception 'Cette opération est déjà annulée.'; end if;
   if motif is null then raise exception 'Indiquez le motif de l''annulation.'; end if;
-  if me.role = 'gerant' then
+  if me.role in ('gerant','sous_gerant') then
     if o.agence_id is distinct from me.agence_id then
       raise exception 'Cette opération appartient à une autre agence.';
     end if;
@@ -808,6 +870,7 @@ begin
         and (acc is null or o.account_id = acc or o.account2_id = acc)
         and (_num(p,'client_id') is null or o.client_id = _num(p,'client_id')::bigint)
         and (_num(p,'receipt_id') is null or o.receipt_id = _num(p,'receipt_id')::bigint)
+        and (_num(p,'fournisseur_id') is null or o.fournisseur_id = _num(p,'fournisseur_id')::bigint)
         and (_txt(p,'commission_status') is null or o.commission_status = _txt(p,'commission_status'))
         and (_bool(p,'include_cancelled') or o.status = 'ok' or _txt(p,'include_cancelled') is null)
         and (q is null or o.details ilike '%'||q||'%'
@@ -829,7 +892,7 @@ begin
   if me.role = 'agent' and o.user_id is distinct from me.id then
     raise exception 'Vous ne pouvez vérifier que vos propres recharges.';
   end if;
-  if me.role = 'gerant' and o.agence_id is distinct from me.agence_id then
+  if me.role in ('gerant','sous_gerant') and o.agence_id is distinct from me.agence_id then
     raise exception 'Cette recharge appartient à une autre agence.';
   end if;
   if com is null or com < 0 then raise exception 'Commission invalide.'; end if;
@@ -845,6 +908,70 @@ begin
   where id = o.id;
   perform _log('operations');
   return jsonb_build_object('ok', true, 'diff', diff, 'balance', _bal(o.account_id));
+end $$;
+
+-- ---------- Fournisseurs ----------------------------------------------------
+-- Un fournisseur est un compte de type « fournisseur », commun à toutes les agences.
+-- Achat à crédit : le compte approvisionné monte, le fournisseur descend (on lui doit).
+-- Paiement : l'argent sort du coffre / de la banque…, le fournisseur remonte vers zéro.
+
+create or replace function save_fournisseur(p jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me profiles; fid bigint := _num(p,'id')::bigint; r accounts;
+begin
+  me := _require_perm('fournisseurs');
+  if _txt(p,'name') is null then raise exception 'Le nom du fournisseur est obligatoire.'; end if;
+  if exists (select 1 from accounts where kind = 'fournisseur' and upper(name) = upper(_txt(p,'name')) and id is distinct from fid) then
+    raise exception 'Ce fournisseur existe déjà.';
+  end if;
+  if fid is null then
+    insert into accounts(name, kind, phone, note, allow_negative, sort)
+    values (_txt(p,'name'), 'fournisseur', _txt(p,'phone'), _txt(p,'note'), true, 200) returning * into r;
+  else
+    update accounts set name = _txt(p,'name'), phone = _txt(p,'phone'), note = _txt(p,'note'),
+      active = coalesce((p->>'active')::boolean, active)
+    where id = fid and kind = 'fournisseur' returning * into r;
+    if r.id is null then raise exception 'Fournisseur introuvable.'; end if;
+  end if;
+  perform _log('accounts');
+  return to_jsonb(r);
+end $$;
+
+create or replace function list_fournisseurs(p jsonb default '{}') returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me profiles;
+begin
+  me := _require_perm('fournisseurs');
+  return (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'id', a.id, 'name', a.name, 'phone', a.phone, 'note', a.note, 'active', a.active,
+      'du', -_bal(a.id),
+      'achats_mois', (select coalesce(sum(o.amount), 0) from operations o
+                      where o.fournisseur_id = a.id and o.kind = 'approvisionnement' and o.status = 'ok'
+                        and o.op_day >= date_trunc('month', current_date)),
+      'last_at', (select max(o.created_at) from operations o where o.fournisseur_id = a.id)
+    ) order by a.active desc, a.name), '[]')
+    from accounts a where a.kind = 'fournisseur');
+end $$;
+
+-- Paiement d'un fournisseur. p = {fournisseur_id, from_id, amount, details}
+create or replace function op_paiement_fournisseur(p jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me profiles; f accounts; a accounts; amt numeric := _num(p,'amount'); oid bigint;
+begin
+  me := _require_perm('fournisseurs');
+  select * into f from accounts where id = _num(p,'fournisseur_id')::bigint and kind = 'fournisseur';
+  if f.id is null then raise exception 'Choisissez le fournisseur.'; end if;
+  select * into a from accounts where id = _num(p,'from_id')::bigint;
+  if a.id is null or a.kind = 'fournisseur' then raise exception 'Choisissez d''où sort l''argent.'; end if;
+  if not _mine(me, a) then raise exception 'L''argent doit venir d''un compte de votre agence.'; end if;
+  if amt is null or amt <= 0 then raise exception 'Montant invalide.'; end if;
+  perform _check_funds(a, amt);
+  insert into operations(user_id, kind, account_id, account2_id, amount, details, fournisseur_id)
+  values (me.id, 'transfert', a.id, f.id, amt, coalesce(_txt(p,'details'), 'Paiement ' || f.name), f.id) returning id into oid;
+  insert into movements(operation_id, account_id, amount) values (oid, a.id, -amt), (oid, f.id, amt);
+  perform _log('operations');
+  return jsonb_build_object('ok', true, 'id', oid, 'du', -_bal(f.id));
 end $$;
 
 -- ---------- Agences : création et soldes avec l'agence principale ----------
@@ -880,7 +1007,7 @@ declare me profiles; ag bigint := _num(p,'agence_id')::bigint;
         d1 date := coalesce(_txt(p,'from')::date, '2000-01-01'); d2 date := coalesce(_txt(p,'to')::date, current_date);
 begin
   me := _require('manager');
-  if me.role = 'gerant' then ag := me.agence_id; end if;
+  if me.role in ('gerant','sous_gerant') then ag := me.agence_id; end if;
   if ag is null or ag = _main() then raise exception 'Choisissez une agence secondaire.'; end if;
   return jsonb_build_object(
     'agence', (select name from agences where id = ag),
@@ -905,7 +1032,7 @@ declare me profiles; uid uuid; acc bigint; last closings; since timestamptz;
 begin
   me := _require(null);
   uid := case when me.role <> 'agent' and _txt(p,'agent_id') is not null then _txt(p,'agent_id')::uuid else me.id end;
-  if me.role = 'gerant' and (select agence_id from profiles where id = uid) is distinct from me.agence_id then
+  if me.role in ('gerant','sous_gerant') and (select agence_id from profiles where id = uid) is distinct from me.agence_id then
     raise exception 'Cet agent appartient à une autre agence.';
   end if;
   acc := _caisse_of(uid);
@@ -955,11 +1082,11 @@ create or replace function closing_validate(p jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare me profiles; c closings; oid bigint; cof bigint; nm text;
 begin
-  me := _require('manager');
+  me := _require_perm('clotures');
   select * into c from closings where id = _num(p,'id')::bigint for update;
   if c.id is null then raise exception 'Clôture introuvable.'; end if;
   if c.status <> 'soumise' then raise exception 'Cette clôture a déjà été traitée.'; end if;
-  if me.role = 'gerant' and c.agence_id is distinct from me.agence_id then
+  if me.role in ('gerant','sous_gerant') and c.agence_id is distinct from me.agence_id then
     raise exception 'Cette clôture appartient à une autre agence.';
   end if;
   select full_name into nm from profiles where id = c.agent_id;
@@ -1011,7 +1138,7 @@ language plpgsql security definer set search_path = public as $$
 declare me profiles; d1 date := coalesce(_txt(p,'from')::date, date_trunc('month', current_date)::date);
         d2 date := coalesce(_txt(p,'to')::date, current_date); ag bigint;
 begin
-  me := _require('manager');
+  me := _require_perm('clotures');
   ag := _scope(me, p);
   return jsonb_build_object(
     'from', d1, 'to', d2, 'agence_id', ag,
@@ -1107,7 +1234,7 @@ create or replace function save_product(p jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare me profiles; pid bigint := _num(p,'id')::bigint; r products;
 begin
-  me := _require('gerante');
+  me := _require_perm('produits');
   if _txt(p,'name') is null then raise exception 'Le nom du produit est obligatoire.'; end if;
   if coalesce(_txt(p,'direction'),'') not in ('entree','sortie') then raise exception 'Choisissez Entrée ou Sortie.'; end if;
   if pid is null then
@@ -1133,7 +1260,7 @@ begin
   if uid = me.id and (coalesce(_txt(p,'role'),'gerante') <> 'gerante' or not coalesce((p->>'active')::boolean, true)) then
     raise exception 'Vous ne pouvez pas retirer vos propres droits de direction.';
   end if;
-  if _txt(p,'role') is not null and _txt(p,'role') not in ('gerante','gerant','agent') then raise exception 'Rôle inconnu.'; end if;
+  if _txt(p,'role') is not null and _txt(p,'role') not in ('gerante','gerant','sous_gerant','agent') then raise exception 'Rôle inconnu.'; end if;
   if _num(p,'agence_id') is not null and not exists (select 1 from agences where id = _num(p,'agence_id')::bigint) then
     raise exception 'Agence introuvable.';
   end if;
@@ -1143,6 +1270,11 @@ begin
     agence_id = coalesce(_num(p,'agence_id')::bigint, agence_id),
     can_caisse = coalesce((p->>'can_caisse')::boolean, can_caisse),
     can_recharge = coalesce((p->>'can_recharge')::boolean, can_recharge),
+    perm_appro = coalesce((p->>'perm_appro')::boolean, perm_appro),
+    perm_produits = coalesce((p->>'perm_produits')::boolean, perm_produits),
+    perm_ajust = coalesce((p->>'perm_ajust')::boolean, perm_ajust),
+    perm_clotures = coalesce((p->>'perm_clotures')::boolean, perm_clotures),
+    perm_fournisseurs = coalesce((p->>'perm_fournisseurs')::boolean, perm_fournisseurs),
     active = coalesce((p->>'active')::boolean, active)
   where id = uid returning * into r;
   if r.id is null then raise exception 'Utilisateur introuvable.'; end if;
@@ -1529,7 +1661,8 @@ begin
                'closing_submit','closing_validate','list_closings','report','save_account','save_product','save_profile','import_cards',
                '_client_for','search_clients','save_client','op_vente','get_receipt','save_settings',
                '_norm_name','import_clients','find_duplicates','merge_clients','verify_commission',
-               '_main','_scope','_acc_in','_liaison','_coffre_of','_set_agence','save_agence','liaison_detail')
+               '_main','_scope','_acc_in','_liaison','_coffre_of','_set_agence','save_agence','liaison_detail',
+               '_can','_require_perm','_mine','save_fournisseur','list_fournisseurs','op_paiement_fournisseur')
     loop
       execute format('revoke execute on function %s from public, anon', f.sig);
       if left(f.proname, 1) = '_' or f.proname = 'handle_new_user' then

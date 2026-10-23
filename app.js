@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '10';
+  const DEMO_SCHEMA_VERSION = '11';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -60,7 +60,13 @@
   const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f(...a), ms); }; };
   const isDir = () => S.me && S.me.role === 'gerante';                 // direction (gérante de l'agence principale)
   const isMgr = () => S.me && S.me.role !== 'agent';                   // direction ou gérant d'agence
-  const roleLabel = r => ({ gerante: 'Direction', gerant: 'Gérant(e) d’agence', agent: 'Agent' }[r] || r);
+  const roleLabel = r => ({ gerante: 'Direction', gerant: 'Gérant(e) d’agence', sous_gerant: 'Sous-gérant(e)', agent: 'Agent' }[r] || r);
+  // Droits (comme dans la base) : direction et gérant d'agence ont tout ; un sous-gérant ce qui est coché.
+  const PERMS = [['appro', 'Approvisionner les comptes (et faire des transferts)'], ['produits', 'Ajouter / modifier des produits'],
+    ['ajust', 'Ajuster les soldes'], ['clotures', 'Valider les clôtures, voir les rapports'], ['fournisseurs', 'Gérer les fournisseurs (achats, paiements)']];
+  const can = perm => !!S.me && (S.me.role === 'gerante' || S.me.role === 'gerant' || (S.me.role === 'sous_gerant' && !!S.me['perm_' + perm]));
+  // Compte de « mon » agence (comme _mine dans la base).
+  const mine = a => isDir() || a.agence_id === S.me.agence_id || (a.agence_id == null && !!S.me.is_main_agence);
   const acc = id => S.accounts.find(a => a.id === Number(id));
   const activeCards = c => ((c && c.cards) || []).filter(k => k.active !== false);
   // Compte utilisable par moi : de mon agence, ou commun à toutes les agences.
@@ -96,7 +102,7 @@
   }
   const PERIODS = [['today', 'Aujourd’hui'], ['yesterday', 'Hier'], ['7d', '7 jours'], ['month', 'Ce mois'], ['lastmonth', 'Mois dernier'], ['year', 'Cette année'], ['custom', 'Dates…']];
   const KIND = { caisse: 'Caisse', recharge: 'Recharge', approvisionnement: 'Approvisionnement', depense: 'Dépense', ajustement: 'Ajustement', transfert: 'Transfert', cloture: 'Remise de caisse' };
-  const ACCOUNT_KIND = { gtp: 'Compte GTP', electronique: 'Compte électronique', caisse: 'Caisse d’agent', coffre: 'Coffre', banque: 'Banque' };
+  const ACCOUNT_KIND = { gtp: 'Compte GTP', electronique: 'Compte électronique', caisse: 'Caisse d’agent', coffre: 'Coffre', banque: 'Banque', fournisseur: 'Fournisseur' };
   const DEP_CATS = ['Transport', 'Repas', 'Fournitures', 'Électricité / eau', 'Loyer', 'Salaire / avance', 'Autre'];
 
   function commission(a, amt) {
@@ -525,17 +531,20 @@
   // ---------------------------------------------------------------- coquille
   // Barre du bas (téléphone) : le « + » central ouvre une nouvelle opération.
   function tabs() {
-    if (isMgr()) return [['tableau', 'Tableau', 'home'], ['journal', 'Journal', 'list'], ['+'], ['clotures', 'Clôtures', 'lock'], ['plus', 'Plus', 'grid']];
+    if (isMgr()) return [['tableau', 'Tableau', 'home'], ['journal', 'Journal', 'list'], ['+'],
+      can('clotures') ? ['clotures', 'Clôtures', 'lock'] : ['clients', 'Clients', 'users'], ['plus', 'Plus', 'grid']];
     return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['+'], ['clients', 'Clients', 'users'], ['cloture', 'Clôture', 'lock']];
   }
   // Menu latéral (ordinateur)
   function navItems() {
     if (isDir()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
-      ['commissions', 'Commissions à vérifier', 'card'], ['rapports', 'Rapports', 'chart'], 'Réglages', ['agences', 'Agences', 'bank'], ['equipe', 'Équipe', 'user'],
-      ['comptes', 'Comptes et commissions', 'bank'], ['produits', 'Produits de caisse', 'tag'], ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'],
-      ['import', 'Importer depuis Excel', 'upload'], ['plus', 'Autres réglages', 'grid']];
-    if (isMgr()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
-      ['commissions', 'Commissions à vérifier', 'card'], ['rapports', 'Rapports', 'chart'], ['cartes', 'Cartes clients', 'card'], ['plus', 'Plus', 'grid']];
+      ['commissions', 'Commissions à vérifier', 'card'], ['fournisseurs', 'Fournisseurs', 'truck'], ['rapports', 'Rapports', 'chart'], 'Réglages',
+      ['agences', 'Agences', 'bank'], ['equipe', 'Équipe', 'user'], ['comptes', 'Comptes et commissions', 'bank'], ['produits', 'Produits de caisse', 'tag'],
+      ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'], ['import', 'Importer depuis Excel', 'upload'], ['plus', 'Autres réglages', 'grid']];
+    if (isMgr()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'],
+      ...(can('clotures') ? [['clotures', 'Clôtures', 'lock']] : []), ['commissions', 'Commissions à vérifier', 'card'],
+      ...(can('fournisseurs') ? [['fournisseurs', 'Fournisseurs', 'truck']] : []), ...(can('clotures') ? [['rapports', 'Rapports', 'chart']] : []),
+      ...(can('produits') ? [['produits', 'Produits de caisse', 'tag']] : []), ['cartes', 'Cartes clients', 'card'], ['plus', 'Plus', 'grid']];
     return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'],
       ...(S.me.can_recharge ? [['commissions', 'Commissions à vérifier', 'card']] : []), ['cloture', 'Clôture du soir', 'lock']];
   }
@@ -609,7 +618,8 @@
   async function route() {
     if (!S.me || !S.me.active || !document.getElementById('main')) return;
     let key = (location.hash.match(/^#\/([a-z]+)/) || [])[1];
-    const allowed = k => VIEWS[k] && (!VIEWS[k].mgr || isMgr()) && (!VIEWS[k].dir || isDir()) && (!VIEWS[k].need || isMgr() || S.me[VIEWS[k].need]);
+    const allowed = k => VIEWS[k] && (!VIEWS[k].mgr || isMgr()) && (!VIEWS[k].dir || isDir()) && (!VIEWS[k].perm || can(VIEWS[k].perm))
+      && (!VIEWS[k].need || isMgr() || S.me[VIEWS[k].need]);
     if (!key || !allowed(key)) {
       key = firstView();
       if (location.hash !== '#/' + key) { history.replaceState(null, '', '#/' + key); }
@@ -644,10 +654,13 @@
         Object.assign(r, { ico: 'out', sym: icon('out'), title: 'Dépense : ' + (o.details || ''), sign: -1, sub: [o.category, o.account].filter(Boolean).join(' · ') });
         break;
       case 'approvisionnement':
-        Object.assign(r, { ico: 'rc', sym: icon('truck'), title: 'Approvisionnement ' + (o.account || ''), sign: 1, sub: [o.account2 ? 'depuis ' + o.account2 : '', o.details].filter(Boolean).join(' · ') });
+        Object.assign(r, { ico: 'rc', sym: icon('truck'), title: 'Approvisionnement ' + (o.account || ''), sign: 1,
+          sub: [o.fournisseur ? (o.account2 === o.fournisseur ? `acheté à crédit chez ${o.fournisseur}` : `acheté chez ${o.fournisseur}, payé avec ${o.account2 || '?'}`)
+            : o.account2 ? 'depuis ' + o.account2 : '', o.details].filter(Boolean).join(' · ') });
         break;
       case 'transfert':
-        Object.assign(r, { sym: icon('swap'), title: `${o.account} → ${o.account2}`, sub: o.details || 'Transfert' });
+        if (o.fournisseur) Object.assign(r, { ico: 'out', sym: icon('out'), title: `Paiement ${o.fournisseur}`, sign: -1, sub: [`payé avec ${o.account}`, o.details].filter(Boolean).join(' · ') });
+        else Object.assign(r, { sym: icon('swap'), title: `${o.account} → ${o.account2}`, sub: o.details || 'Transfert' });
         break;
       case 'ajustement':
         Object.assign(r, { sym: icon('adjust'), title: 'Ajustement ' + (o.account || ''), sign: Math.sign(o.amount), sub: o.details || '' });
@@ -1453,9 +1466,9 @@
     const gtp = B.filter(b => b.kind === 'gtp'), el = B.filter(b => ['electronique', 'banque'].includes(b.kind));
     const cais = B.filter(b => b.kind === 'caisse'), cof = B.filter(b => b.kind === 'coffre');
     const alerts = [];
-    B.filter(b => b.balance < 0).forEach(b => alerts.push(`<div class="alert bad"><span><b>${esc(b.name)}</b> est négatif : ${fmt(b.balance)}.</span></div>`));
+    B.filter(b => b.balance < 0 && b.kind !== 'fournisseur').forEach(b => alerts.push(`<div class="alert bad"><span><b>${esc(b.name)}</b> est négatif : ${fmt(b.balance)}.</span></div>`));
     B.filter(b => b.balance >= 0 && Number(b.low_alert) > 0 && b.balance < b.low_alert).forEach(b => alerts.push(`<div class="alert warn"><span><b>${esc(b.name)}</b> est bas : ${fmt(b.balance)} (seuil ${fmt(b.low_alert)}).</span></div>`));
-    if (d.pending_closings) alerts.push(`<div class="alert info"><span>${d.pending_closings} clôture(s) à valider. <a href="#/clotures">Voir</a></span></div>`);
+    if (d.pending_closings && can('clotures')) alerts.push(`<div class="alert info"><span>${d.pending_closings} clôture(s) à valider. <a href="#/clotures">Voir</a></span></div>`);
     if (d.commissions_to_check) alerts.push(`<div class="alert warn"><span>${d.commissions_to_check} commission(s) de recharge à vérifier sur le rapport du GTP. <a href="#/commissions">Vérifier</a></span></div>`);
     const sum = l => l.reduce((s, b) => s + Number(b.balance), 0);
     m.innerHTML = `
@@ -1468,13 +1481,17 @@
       </div>
       <button class="hero-cta only-mobile" data-do="vente">${icon('plus')}Nouvelle opération</button>
       <div class="actions four">
-        ${isDir() ? `<button class="action" data-do="appro">${icon('truck')}Approvisionner un compte</button>`
-          : `<button class="action" data-do="reversement">${icon('swap')}Reverser à la principale</button>`}
-        <button class="action" data-do="transfert">${icon('swap')}Transfert entre comptes</button>
-        <button class="action" data-do="ajust">${icon('adjust')}Ajuster un solde</button>
-        <button class="action" data-do="depense">${icon('out')}Dépense</button>
+        ${[can('appro') && `<button class="action" data-do="appro">${icon('truck')}Approvisionner un compte</button>`,
+          !isDir() && can('appro') && !S.me.is_main_agence && `<button class="action" data-do="reversement">${icon('swap')}Reverser à la principale</button>`,
+          can('appro') && `<button class="action" data-do="transfert">${icon('swap')}Transfert entre comptes</button>`,
+          can('fournisseurs') && `<button class="action" data-do="payerfour">${icon('out')}Payer un fournisseur</button>`,
+          can('ajust') && `<button class="action" data-do="ajust">${icon('adjust')}Ajuster un solde</button>`,
+          `<button class="action" data-do="depense">${icon('out')}Dépense</button>`].filter(Boolean).join('')}
       </div>
       ${(d.liaisons || []).length ? section('Entre agences', liaisonList(d.liaisons)) : ''}
+      ${d.fournisseurs_du != null && Number(d.fournisseurs_du) > 0 ? section('Fournisseurs', `<div class="list"><a class="row" href="#/fournisseurs"><div class="ico neu">${icon('truck')}</div>
+        <div class="main"><div class="t">Nous devons ${fmt(d.fournisseurs_du)} à nos fournisseurs</div><div class="s">Toucher pour le détail et les paiements</div></div>
+        <div class="end"><div class="amt num warn">${fmt(d.fournisseurs_du)}</div></div></a></div>`) : ''}
       <div class="cols">
         <div>
           ${section('Soldes GTP', balList(gtp, true), `<span class="num">${fmt(sum(gtp))}</span>`)}
@@ -1568,23 +1585,128 @@
 
   // Approvisionner un compte : GTP ou compte électronique (Mixx, Flooz, Tmoney, Wave…).
   function sheetAppro(accId) {
+    // opts : { fournisseurId } pour ouvrir directement un achat chez ce fournisseur.
+    const opts = typeof accId === 'object' && accId ? accId : { accId };
     const label = a => a.agence_id && (S.agences || []).length > 1 ? `${balLabel(a)} · ${agName(a.agence_id)}` : balLabel(a);
-    const gtps = S.accounts.filter(a => a.kind === 'gtp' && a.active);
-    const elecs = S.accounts.filter(a => a.kind === 'electronique' && a.active);
-    const srcs = S.accounts.filter(a => a.active && a.kind !== 'gtp');
-    const grp = (t, list) => list.length ? `<optgroup label="${esc(t)}">${list.map(a => `<option value="${a.id}" ${a.id === Number(accId) ? 'selected' : ''}>${esc(label(a))}</option>`).join('')}</optgroup>` : '';
+    const gtps = S.accounts.filter(a => a.kind === 'gtp' && a.active && mine(a));
+    const elecs = S.accounts.filter(a => a.kind === 'electronique' && a.active && mine(a));
+    const four = S.accounts.filter(a => a.kind === 'fournisseur' && a.active);
+    const payers = S.accounts.filter(a => a.active && mine(a) && ['coffre', 'caisse', 'banque', 'electronique'].includes(a.kind) && (a.kind !== 'caisse' || isDir() || a.agent_id === S.me.id));
+    const grp = (t, list, sel) => list.length ? `<optgroup label="${esc(t)}">${list.map(a => `<option value="${a.id}" ${a.id === Number(sel) ? 'selected' : ''}>${esc(label(a))}</option>`).join('')}</optgroup>` : '';
+    if (!gtps.length && !elecs.length) return toast('Aucun compte de votre agence à approvisionner.', 'bad');
     sheet({
       title: 'Approvisionner un compte',
-      body: `${field('Compte à approvisionner', `<select class="input" name="gtp">${grp('Comptes GTP', gtps)}${grp('Comptes électroniques (Mixx, Flooz…)', elecs)}</select>`)}
+      body: `${field('Compte à approvisionner', `<select class="input" name="gtp">${grp('Comptes GTP', gtps, opts.accId)}${grp('Comptes électroniques (Mixx, Flooz, Tmoney…)', elecs, opts.accId)}</select>`)}
         ${field('Montant', moneyInput('amount', 'class="input money autofocus"'))}
-        ${field('Argent pris dans', `<select class="input" name="src">${options(srcs.map(a => [a.id, label(a)]), '', '— Extérieur (non suivi dans l’application) —')}</select>`, 'Choisissez le coffre, une caisse ou la banque si l’argent sort d’un compte suivi ici. « Extérieur » : l’argent vient d’ailleurs (ex. versement à la banque, achat de crédit Mixx).')}
+        ${can('fournisseurs') || four.length ? field('Acheté chez (fournisseur)', `<select class="input" name="four">${options(four.map(a => [a.id, a.name]), opts.fournisseurId || '', '— Aucun fournisseur —')}</select>`,
+          can('fournisseurs') ? 'Nouveau fournisseur ? Créez-le dans « Fournisseurs ».' : '') : ''}
+        <div class="field" id="paybox"><span>Payé comment ?</span><div class="chips wrap">
+          <button type="button" class="chip" data-chip="mode" data-v="credit">À crédit (on le paiera plus tard)</button>
+          <button type="button" class="chip on" data-chip="mode" data-v="cash">Payé maintenant</button>
+          <button type="button" class="chip" data-chip="mode" data-v="ext">Argent extérieur</button></div></div>
+        <div id="srcbox">${field('Argent pris dans', `<select class="input" name="src">${options(payers.map(a => [a.id, label(a)]), (payers.find(a => a.kind === 'coffre') || {}).id || '')}</select>`)}</div>
+        <p class="small muted" id="payhelp"></p>
         ${field('Détails', '<input class="input" name="details" placeholder="ex. versement GTCO du jour, achat de float Mixx…" autocomplete="off">')}`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
+        const fsel = c.q('[name=four]');
+        const draw = () => {
+          const hasF = fsel && fsel.value;
+          c.q('[data-chip=mode][data-v=credit]').classList.toggle('hidden', !hasF);
+          if (!hasF && chipVal(c, 'mode') === 'credit') { c.qa('[data-chip=mode]').forEach(b => b.classList.toggle('on', b.dataset.v === 'cash')); }
+          const mode = chipVal(c, 'mode');
+          c.q('#srcbox').classList.toggle('hidden', mode !== 'cash');
+          c.q('#payhelp').textContent = mode === 'credit' ? 'Le montant s’ajoute à ce que nous devons à ce fournisseur.'
+            : mode === 'ext' ? 'L’argent vient d’ailleurs (non suivi dans l’application), par ex. un versement à la banque.'
+            : 'L’argent sort du compte choisi (coffre, caisse, banque, Mixx…).';
+        };
+        chipGroup(c, 'mode', draw);
+        if (fsel) fsel.onchange = draw;
+        if (opts.fournisseurId) c.qa('[data-chip=mode]').forEach(b => b.classList.toggle('on', b.dataset.v === 'credit'));
+        draw();
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          const mode = chipVal(c, 'mode'), f = fsel && fsel.value ? Number(fsel.value) : null;
           const r = await rpc('op_approvisionnement', { gtp_id: Number(c.q('[name=gtp]').value), amount: parseAmt(c.q('[name=amount]').value),
-            source_id: c.q('[name=src]').value || null, details: c.q('[name=details]').value });
+            source_id: mode === 'credit' ? f : mode === 'cash' ? Number(c.q('[name=src]').value) : null,
+            fournisseur_id: f, details: c.q('[name=details]').value });
           c.close(); toast(`Approvisionnement enregistré. Nouveau solde : ${fmt(r.balance)}`, 'ok'); refreshNow();
+        });
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------- fournisseurs
+  async function vFournisseurs(m) {
+    const list = await rpc('list_fournisseurs');
+    const tot = list.reduce((s, f) => s + Math.max(Number(f.du), 0), 0);
+    m.innerHTML = `
+      <div class="alert info"><span>Vos fournisseurs de float (Mixx, Moov Money…), de crédit de communication, de forfaits… Un achat se fait avec <b>Approvisionner un compte</b> (à crédit ou payé). Ce que vous leur devez se met à jour tout seul.</span></div>
+      ${list.length ? `<div class="kpis" style="grid-template-columns:1fr"><div class="kpi"><div class="label">Total dû aux fournisseurs</div><div class="value num ${tot > 0 ? 'warn' : ''}">${fmt(tot)}</div></div></div>` : ''}
+      <div class="list">${list.length ? list.map(f => `<button class="row" data-four="${f.id}">
+          <div class="ico neu">${icon('truck')}</div>
+          <div class="main"><div class="t">${esc(f.name)} ${f.active ? '' : '<span class="tag">inactif</span>'}</div>
+            <div class="s">${esc([f.phone, `achats du mois ${fmt(f.achats_mois)}`, f.last_at ? 'dernière opération ' + ago(f.last_at) : ''].filter(Boolean).join(' · '))}</div></div>
+          <div class="end"><div class="amt num ${f.du > 0 ? 'warn' : f.du < 0 ? 'pos' : ''}">${f.du > 0 ? fmt(f.du) : f.du < 0 ? 'avance ' + fmt(-f.du) : 'à jour'}</div></div></button>`).join('')
+        : '<div class="empty">Aucun fournisseur pour le moment.</div>'}</div>
+      <button class="btn block" id="newf" style="margin-top:12px">${icon('plus')} Nouveau fournisseur</button>`;
+    S.fours = new Map(list.map(f => [f.id, f]));
+    m.querySelectorAll('[data-four]').forEach(b => b.onclick = () => sheetFournisseur(S.fours.get(Number(b.dataset.four))));
+    m.querySelector('#newf').onclick = () => sheetFournisseurEdit(null);
+  }
+
+  async function sheetFournisseur(f) {
+    const hist = await rpc('list_operations', { fournisseur_id: f.id, from: '2000-01-01', limit: 60, agence_id: null });
+    sheet({
+      title: f.name, wide: true,
+      body: `<div class="hero" style="margin-bottom:14px"><div class="label">${f.du > 0 ? 'Nous lui devons' : f.du < 0 ? 'Nous avons payé d’avance' : 'Compte à jour'}</div><div class="big num">${fmt(Math.abs(f.du))}</div>
+          <div class="sub">${esc([f.phone, f.note].filter(Boolean).join(' · '))}</div></div>
+        ${section('Historique (achats et paiements)', opList(hist, true, 'Aucune opération.'))}`,
+      foot: `<button class="btn" data-x="edit">Modifier</button><button class="btn" data-x="buy">${icon('truck')} Acheter</button><button class="btn primary" data-x="pay">${icon('out')} Payer</button>`,
+      onMount(c) {
+        c.q('[data-x=edit]').onclick = () => { c.close(); sheetFournisseurEdit(f); };
+        c.q('[data-x=buy]').onclick = () => { c.close(); sheetAppro({ fournisseurId: f.id }); };
+        c.q('[data-x=pay]').onclick = () => { c.close(); sheetPayerFournisseur(f.id); };
+      },
+    });
+  }
+
+  function sheetFournisseurEdit(f) {
+    sheet({
+      title: f ? 'Modifier le fournisseur' : 'Nouveau fournisseur',
+      body: `${field('Nom', `<input class="input autofocus" name="name" value="${esc(f ? f.name : '')}" placeholder="ex. Moov Distribution, grossiste crédit…">`)}
+        ${field('Téléphone', `<input class="input" name="phone" inputmode="tel" value="${esc(f ? f.phone || '' : '')}">`)}
+        ${field('Note', `<input class="input" name="note" value="${esc(f ? f.note || '' : '')}" placeholder="ce qu’il nous vend, conditions…">`)}
+        ${f ? `<label class="check"><input type="checkbox" name="active" ${f.active ? 'checked' : ''}> Fournisseur actif</label>` : ''}`,
+      foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
+      onMount(c) {
+        c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          const p = { id: f ? f.id : null, name: c.q('[name=name]').value, phone: c.q('[name=phone]').value, note: c.q('[name=note]').value };
+          if (c.q('[name=active]')) p.active = c.q('[name=active]').checked;
+          await rpc('save_fournisseur', p);
+          c.close(); toast('Fournisseur enregistré.', 'ok'); await loadBoot(); route();
+        });
+      },
+    });
+  }
+
+  async function sheetPayerFournisseur(fid) {
+    const list = (await rpc('list_fournisseurs')).filter(f => f.active);
+    if (!list.length) return toast('Aucun fournisseur. Créez-le d’abord dans « Fournisseurs ».', 'bad');
+    const payers = S.accounts.filter(a => a.active && mine(a) && ['coffre', 'caisse', 'banque', 'electronique'].includes(a.kind) && (a.kind !== 'caisse' || isDir() || a.agent_id === S.me.id));
+    const cur = list.find(f => f.id === Number(fid)) || list.find(f => f.du > 0) || list[0];
+    sheet({
+      title: 'Payer un fournisseur',
+      body: `${field('Fournisseur', `<select class="input" name="f">${options(list.map(f => [f.id, `${f.name}${f.du > 0 ? ' (dû ' + fmtN(f.du) + ' F)' : ''}`]), cur.id)}</select>`)}
+        ${field('Montant payé', moneyInput('amount', `autofocus value="${cur.du > 0 ? fmtN(cur.du) : ''}"`))}
+        ${field('Payé avec', `<select class="input" name="from">${options(payers.map(a => [a.id, balLabel(a)]), (payers.find(a => a.kind === 'coffre') || {}).id || '')}</select>`)}
+        ${field('Détails', '<input class="input" name="details" autocomplete="off" placeholder="ex. règlement facture du 20/10">')}`,
+      foot: '<button class="btn primary" data-x="ok">Enregistrer le paiement</button>',
+      onMount(c) {
+        c.q('[name=f]').onchange = e => { const f = list.find(x => x.id === Number(e.target.value)); c.q('[name=amount]').value = f && f.du > 0 ? fmtN(f.du) : ''; };
+        c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          const r = await rpc('op_paiement_fournisseur', { fournisseur_id: Number(c.q('[name=f]').value), from_id: Number(c.q('[name=from]').value),
+            amount: parseAmt(c.q('[name=amount]').value), details: c.q('[name=details]').value || null });
+          c.close(); toast(r.du > 0 ? `Paiement enregistré. Reste dû : ${fmt(r.du)}` : 'Paiement enregistré. Fournisseur à jour.', 'ok'); refreshNow();
         });
       },
     });
@@ -1649,9 +1771,9 @@
         ${a.note ? `<p class="small muted">${esc(a.note)}</p>` : ''}
         <div class="list">
           <button class="row" data-x="ops"><div class="ico neu">${icon('list')}</div><div class="main"><div class="t">Voir les opérations du mois</div></div>${icon('chev')}</button>
-          ${['gtp', 'electronique'].includes(a.kind) && isDir() ? `<button class="row" data-x="appro"><div class="ico rc">${icon('truck')}</div><div class="main"><div class="t">Approvisionner</div></div>${icon('chev')}</button>` : ''}
-          ${mine ? `<button class="row" data-x="tr"><div class="ico neu">${icon('swap')}</div><div class="main"><div class="t">Transférer vers un autre compte</div></div>${icon('chev')}</button>
-          <button class="row" data-x="adj"><div class="ico neu">${icon('adjust')}</div><div class="main"><div class="t">Ajuster le solde</div></div>${icon('chev')}</button>` : ''}
+          ${['gtp', 'electronique'].includes(a.kind) && can('appro') && (isDir() || a.agence_id === S.me.agence_id || (a.agence_id == null && S.me.is_main_agence)) ? `<button class="row" data-x="appro"><div class="ico rc">${icon('truck')}</div><div class="main"><div class="t">Approvisionner</div></div>${icon('chev')}</button>` : ''}
+          ${mine && can('appro') ? `<button class="row" data-x="tr"><div class="ico neu">${icon('swap')}</div><div class="main"><div class="t">Transférer vers un autre compte</div></div>${icon('chev')}</button>` : ''}
+          ${mine && can('ajust') ? `<button class="row" data-x="adj"><div class="ico neu">${icon('adjust')}</div><div class="main"><div class="t">Ajuster le solde</div></div>${icon('chev')}</button>` : ''}
           ${isDir() ? `<button class="row" data-x="edit"><div class="ico neu">${icon('tag')}</div><div class="main"><div class="t">Modifier le compte${a.kind === 'gtp' ? ' et la commission' : ''}</div></div>${icon('chev')}</button>` : ''}
         </div>
         ${!mine ? `<p class="small muted">Compte commun : seule la direction peut le modifier ou l’ajuster.</p>` : ''}`,
@@ -1701,7 +1823,9 @@
         ${item('#/clients', 'users', 'Clients', 'Fiches clients, cartes, historique')}
         ${isDir() ? item('#/doublons', 'users', 'Clients en double', 'Repérer et fusionner les fiches d’une même personne') : ''}
         ${item('#/commissions', 'card', 'Commissions à vérifier', 'Pointer les commissions avec le rapport du GTP')}
-        ${item('#/rapports', 'chart', 'Rapports', 'Par agence, par produit, par GTP, par agent, commissions par mois')}
+        ${can('fournisseurs') ? item('#/fournisseurs', 'truck', 'Fournisseurs', 'Achats, paiements, ce que nous devons') : ''}
+        ${can('clotures') ? item('#/rapports', 'chart', 'Rapports', 'Par agence, par produit, par GTP, par agent, commissions par mois') : ''}
+        ${!isDir() && can('produits') ? item('#/produits', 'tag', 'Produits de caisse', 'Ajouter ou modifier les produits et services') : ''}
         ${item('#/cartes', 'card', 'Cartes clients', 'Rechercher, corriger, ajouter')}
         <button class="row" data-do="export"><div class="ico neu">${icon('download')}</div><div class="main"><div class="t">Exporter en Excel</div><div class="s">Sauvegarde de toutes les opérations d’une période</div></div>${icon('chev')}</button>
       </div>`)}
@@ -1910,16 +2034,21 @@
       title: t.full_name || 'Utilisateur',
       body: `${field('Nom affiché', `<input class="input" name="full_name" value="${esc(t.full_name)}">`)}
         ${field('Agence', `<select class="input" name="agence">${options((S.agences || []).map(g => [g.id, g.name]), t.agence_id || mainAgence().id)}</select>`)}
-        ${field('Rôle', `<select class="input" name="role">${options([['agent', 'Agent'], ['gerant', 'Gérant(e) d’agence (gère son agence)'], ['gerante', 'Direction (voit toutes les agences, règle tout)']], t.role)}</select>`)}
+        ${field('Rôle', `<select class="input" name="role">${options([['agent', 'Agent'], ['sous_gerant', 'Sous-gérant(e) (droits à cocher ci-dessous)'], ['gerant', 'Gérant(e) d’agence (gère toute son agence)'], ['gerante', 'Direction (voit toutes les agences, règle tout)']], t.role)}</select>`)}
         <label class="check"><input type="checkbox" name="active" ${t.active ? 'checked' : ''}> Compte actif (peut se connecter)</label>
         <label class="check"><input type="checkbox" name="can_caisse" ${t.can_caisse ? 'checked' : ''}> Droit : opérations de caisse</label>
         <label class="check"><input type="checkbox" name="can_recharge" ${t.can_recharge ? 'checked' : ''}> Droit : recharges de cartes</label>
+        <div id="permbox" class="panel" style="margin-top:8px"><div style="font-weight:650;margin-bottom:4px">Droits du sous-gérant (sur son agence)</div>
+          ${PERMS.map(([k, l]) => `<label class="check"><input type="checkbox" name="perm_${k}" ${t['perm_' + k] ? 'checked' : ''}> ${esc(l)}</label>`).join('')}</div>
         <p class="small muted">Identifiant de connexion : « ${esc(t.login || '')} ». Désactiver un compte bloque la connexion sans effacer son historique.</p>`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
+        const showPerms = () => c.q('#permbox').classList.toggle('hidden', c.q('[name=role]').value !== 'sous_gerant');
+        c.q('[name=role]').onchange = showPerms; showPerms();
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
-          await rpc('save_profile', { id: t.id, full_name: c.q('[name=full_name]').value, role: c.q('[name=role]').value, agence_id: Number(c.q('[name=agence]').value),
-            active: c.q('[name=active]').checked, can_caisse: c.q('[name=can_caisse]').checked, can_recharge: c.q('[name=can_recharge]').checked });
+          const perms = Object.fromEntries(PERMS.map(([k]) => ['perm_' + k, c.q(`[name=perm_${k}]`).checked]));
+          await rpc('save_profile', Object.assign({ id: t.id, full_name: c.q('[name=full_name]').value, role: c.q('[name=role]').value, agence_id: Number(c.q('[name=agence]').value),
+            active: c.q('[name=active]').checked, can_caisse: c.q('[name=can_caisse]').checked, can_recharge: c.q('[name=can_recharge]').checked }, perms));
           c.close(); toast('Enregistré.', 'ok'); await loadBoot(); route();
         });
       },
@@ -1946,7 +2075,7 @@
     sheet({
       title: a ? 'Modifier le compte' : 'Nouveau compte',
       body: `${field('Nom', `<input class="input" name="name" value="${esc(x.name || '')}">`)}
-        ${field('Type', `<select class="input" name="kind" ${a && a.kind === 'caisse' ? 'disabled' : ''}>${options(Object.entries(ACCOUNT_KIND).filter(([k]) => k !== 'caisse' || x.kind === 'caisse'), x.kind)}</select>`)}
+        ${field('Type', `<select class="input" name="kind" ${a && a.kind === 'caisse' ? 'disabled' : ''}>${options(Object.entries(ACCOUNT_KIND).filter(([k]) => (k !== 'caisse' || x.kind === 'caisse') && k !== 'fournisseur'), x.kind)}</select>`)}
         ${field('Agence', `<select class="input" name="agence" ${a && a.kind === 'caisse' ? 'disabled' : ''}>${options([['', 'Commun à toutes les agences'], ...(S.agences || []).map(g => [g.id, g.name])], x.agence_id || '')}</select>`,
           'Commun : utilisable par toutes les agences (GTP, Wave, Orange Money, RIA, Western Union…). Sinon : propre à une agence (son Mixx, son Flooz, son coffre).')}
         <div id="gtpf">
@@ -2367,15 +2496,16 @@
     clients: { title: 'Clients', render: vClients },
     cloture: { title: 'Clôture du soir', render: vCloture },
     tableau: { title: 'Tableau de bord', render: vTableau, live: true, mgr: true },
-    clotures: { title: 'Clôtures', render: vClotures, live: true, mgr: true },
+    clotures: { title: 'Clôtures', render: vClotures, live: true, mgr: true, perm: 'clotures' },
+    fournisseurs: { title: 'Fournisseurs', render: vFournisseurs, live: true, mgr: true, perm: 'fournisseurs' },
     plus: { title: 'Plus', render: vPlus, mgr: true },
-    rapports: { title: 'Rapports', render: vRapports, mgr: true },
+    rapports: { title: 'Rapports', render: vRapports, mgr: true, perm: 'clotures' },
     cartes: { title: 'Cartes clients', render: vCartes, mgr: true },
     doublons: { title: 'Clients en double', render: vDoublons, dir: true },
     commissions: { title: 'Commissions à vérifier', render: vCommissions, need: 'can_recharge' },
     equipe: { title: 'Équipe', render: vEquipe, live: true, dir: true },
     comptes: { title: 'Comptes et commissions', render: vComptes, dir: true },
-    produits: { title: 'Produits de caisse', render: vProduits, dir: true },
+    produits: { title: 'Produits de caisse', render: vProduits, mgr: true, perm: 'produits' },
     import: { title: 'Importer depuis Excel', render: vImport, dir: true },
     agences: { title: 'Agences', render: vAgences, live: true, dir: true },
   };
@@ -2401,6 +2531,7 @@
     ajust: () => sheetAjust(),
     export: () => sheetExport(),
     reversement: () => sheetReversement(),
+    payerfour: () => sheetPayerFournisseur(),
     company: () => sheetCompany(),
     me: () => sheetMe(),
     newcard: () => sheetCard(null, {}),

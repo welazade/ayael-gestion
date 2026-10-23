@@ -69,4 +69,14 @@ select op_vente(jsonb_build_object('client_id', (select id from clients where na
 select op_vente(jsonb_build_object('client_name', 'Client de passage',
   'lines', jsonb_build_array(jsonb_build_object('type', 'caisse', 'product_id', (select id from products where name = 'Retrait RIA'), 'amount', 10000, 'details', 'MTCN 1234567890'))));
 
+-- Une sous-gérante à l'agence principale, et un fournisseur avec un achat à crédit.
+select set_config('app.uid', '00000000-0000-0000-0000-000000000001', false);
+insert into auth.users(id, email, raw_user_meta_data) values
+  ('00000000-0000-0000-0000-000000000006', 'sousgerante@ayael.app', '{"full_name":"Sous-gérante (démo)"}')
+on conflict do nothing;
+select save_profile('{"id":"00000000-0000-0000-0000-000000000006","role":"sous_gerant","active":true,"perm_appro":true,"perm_fournisseurs":true}');
+select save_fournisseur('{"name":"Moov Distribution","phone":"90 00 00 00","note":"Float Moov Money, crédit Moov"}');
+select op_approvisionnement(jsonb_build_object('gtp_id', (select id from accounts where name = 'Mixx agent 1'), 'amount', 100000,
+  'source_id', (select id from accounts where name = 'Moov Distribution'), 'details', 'Float Mixx (démo)'));
+
 select set_config('app.uid', '', false);
