@@ -296,12 +296,52 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .ticket .x { text-decoration: line-through; }
 .ticket .title { font-weight: 700; letter-spacing: .1em; }
 #print-root { display: none; }
+
+/* ---------- Bordereau (format DL 99 × 210 mm, comme les bordereaux papier) ---------- */
+.bd-wrap { overflow-x: auto; }
+.bd { --red: #E32B2B; background: #fff; color: #111; width: 99mm; min-height: 210mm; margin: 0 auto; padding: 6mm 6mm 5mm; box-sizing: border-box;
+  font: 9pt/1.3 "Segoe UI", Roboto, Arial, sans-serif; border: 1px solid #DDD; box-shadow: 0 2px 10px rgba(0,0,0,.06);
+  -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.bd-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 3mm; }
+.bd-top img { height: 15mm; width: auto; }
+.bd-no { text-align: right; font-size: 8pt; line-height: 1.35; white-space: nowrap; }
+.bd-no b { font-size: 10pt; color: var(--red); }
+.bd-info { font-size: 6.4pt; line-height: 1.35; color: #333; margin-top: 2mm; padding-bottom: 2mm; border-bottom: .3mm solid #999; }
+.bd-title { font: 900 17pt/1.05 "Arial Black", "Segoe UI", Arial, sans-serif; letter-spacing: -.02em; margin-top: 3mm; text-transform: uppercase; }
+.bd-sub { color: var(--red); font-weight: 800; font-size: 11pt; margin-bottom: 2.5mm; }
+.bd-sec { background: #F3F3F4; border-radius: 3mm; padding: 2.2mm 3mm 2.6mm; margin-bottom: 2.2mm; position: relative; break-inside: avoid; }
+.bd-sec.x { opacity: .55; }
+.bd-cancel { position: absolute; inset: 0; display: grid; place-items: center; color: var(--red); font-weight: 900; font-size: 18pt; transform: rotate(-12deg); letter-spacing: .1em; }
+.bd-h { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; font-weight: 800; text-transform: uppercase; font-size: 9pt; margin-bottom: 1.2mm; }
+.bd-h2 { margin-top: 2.5mm; }
+.bd-amt { font-size: 9.5pt; white-space: nowrap; text-transform: none; }
+.bd-lab { font-size: 7pt; font-style: italic; color: #444; margin-top: 1.4mm; }
+.bd-line { min-height: 4.6mm; border-bottom: .25mm dotted #666; font-weight: 600; padding: .4mm 0; word-break: break-word; }
+.bd-boxes { display: grid; border: .3mm solid #222; border-radius: 1.6mm; overflow: hidden; background: #fff; margin-top: .6mm; }
+.bd-boxes span { height: 6.5mm; display: grid; place-items: center; font: 700 10pt ui-monospace, Consolas, monospace; border-left: .25mm solid #999; }
+.bd-boxes span:first-child { border-left: 0; }
+.bd-opts { display: flex; flex-wrap: wrap; gap: 1.2mm 3.5mm; margin: .8mm 0; }
+.bd-o { display: inline-flex; align-items: center; gap: 1.2mm; font-weight: 700; font-size: 8pt; text-transform: uppercase; }
+.bd-ck { width: 3.2mm; height: 3.2mm; border: .3mm solid #222; border-radius: .6mm; display: inline-grid; place-items: center; background: #fff; flex: none; }
+.bd-ck.on { background: var(--red); border-color: var(--red); }
+.bd-ck.on::after { content: "✓"; color: #fff; font-size: 7pt; font-weight: 900; line-height: 1; }
+.bd-tot { display: flex; justify-content: space-between; align-items: center; background: #FDECEC; border-radius: 3mm; padding: 2.4mm 3mm; }
+.bd-tot span { color: var(--red); font-weight: 800; font-size: 8.5pt; }
+.bd-tot b { font-size: 13pt; white-space: nowrap; }
+.bd-words { font-style: italic; }
+.bd-pay { display: flex; flex-wrap: wrap; gap: 1mm 4mm; font-size: 8pt; margin-top: 1.6mm; }
+.bd-sign { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
+.bd-sign > div { background: #F3F3F4; border-radius: 3mm; height: 20mm; padding: 1.6mm 2mm; display: flex; flex-direction: column; justify-content: space-between; font-size: 7pt; text-align: center; }
+.bd-sign small { font-size: 7pt; color: #555; }
+.bd-foot { text-align: center; color: var(--red); font-size: 7.5pt; font-weight: 600; margin-top: 2.5mm; }
+
 @media print {
   body { background: #fff; }
   body > *:not(#print-root) { display: none !important; }
   #print-root { display: block !important; }
   #print-root .ticket { border: 0; margin: 0; padding: 0 2mm; width: auto; }
   #print-root.a4 .ticket { width: 120mm; margin: 0 auto; font-size: 12pt; }
+  #print-root.dl .bd { border: 0; box-shadow: none; margin: 0; }
 }
 
 .spinner { width: 22px; height: 22px; border: 3px solid #DDD; border-top-color: var(--brand); border-radius: 50%; animation: spin .8s linear infinite; margin: 24px auto; }

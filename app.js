@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '11';
+  const DEMO_SCHEMA_VERSION = '12';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -996,7 +996,10 @@
 
   // ---------------------------------------------------------------- reçu
   const pad = n => String(n).padStart(6, '0');
-  function company() { return Object.assign({ name: 'AYAEL ENTREPRISE', address: '', phone: '', title: 'REÇU', footer: '', format: '80mm' }, S.settings.company || {}); }
+  function company() {
+    return Object.assign({ name: 'AYAEL ENTREPRISE', slogan: '', address: '', phone: '', whatsapp: '', rccm: '', nif: '', bank: '', website: '',
+      title: 'REÇU', footer: '', format: '80mm' }, S.settings.company || {});
+  }
   function receiptLine(o) {
     const label = o.kind === 'recharge' ? `Recharge carte N° ${o.card_number}` : (o.product || KIND[o.kind]);
     const sub = o.kind === 'recharge' ? (o.holder_name && o.holder_name !== o.client_name ? o.holder_name : '') : (o.details || '');
@@ -1045,21 +1048,169 @@
     if (ph.length === 8) ph = '228' + ph;
     window.open(`https://wa.me/${ph}?text=${encodeURIComponent(txt)}`, '_blank', 'noopener');
   }
+  // ---------------------------------------------------------------- bordereau (format DL 99 × 210 mm)
+  // Montant en lettres : 18 900 → « Dix-huit mille neuf cents francs CFA ».
+  function enLettres(n) {
+    n = Math.round(Math.abs(Number(n) || 0));
+    const U = ['zéro', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf', 'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'dix-sept', 'dix-huit', 'dix-neuf'];
+    const T = ['', '', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante', 'soixante', 'quatre-vingt', 'quatre-vingt'];
+    const d2 = x => {
+      if (x < 20) return U[x];
+      const t = Math.floor(x / 10), u = x % 10;
+      if (t === 7 || t === 9) return T[t] + (t === 7 && u === 1 ? ' et ' : '-') + U[10 + u];
+      if (u === 0) return t === 8 ? 'quatre-vingts' : T[t];
+      return T[t] + (u === 1 && t !== 8 ? ' et un' : '-' + U[u]);
+    };
+    const d3 = x => {
+      const h = Math.floor(x / 100), r = x % 100;
+      const s = h ? (h === 1 ? 'cent' : U[h] + ' cent' + (r === 0 ? 's' : '')) : '';
+      return r ? (s ? s + ' ' : '') + d2(r) : s;
+    };
+    if (!n) return 'Zéro franc CFA';
+    const parts = [], g = Math.floor(n / 1e9), m = Math.floor(n / 1e6) % 1000, k = Math.floor(n / 1000) % 1000, r = n % 1000;
+    const noS = s => s.replace(/(cent|vingt)s$/, '$1');
+    if (g) parts.push(d3(g) + ' milliard' + (g > 1 ? 's' : ''));
+    if (m) parts.push(d3(m) + ' million' + (m > 1 ? 's' : ''));
+    if (k) parts.push(k === 1 ? 'mille' : noS(d3(k)) + ' mille');
+    if (r) parts.push(d3(r));
+    const s = parts.join(' ') + ((m || g) && !k && !r ? ' de' : '') + ' francs CFA';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  // Type de rubrique selon le produit (comme les bordereaux papier).
+  function bordType(o) {
+    if (o.kind === 'recharge') return 'carte';
+    const n = norm(o.product);
+    if (/CARTE/.test(n)) return 'carte';
+    if (/\bRIA\b|WESTERN|MONEY ?GRAM/.test(n)) return 'transfert';
+    if (/LAFIA|CASH ?POWER|COMPTEUR|CEET|ELECTRICITE/.test(n)) return 'energie';
+    if (/CREDIT|FORFAIT|UNITE|PASS/.test(n)) return 'credit';
+    if (/^(DEPOT|RETRAIT)\b/.test(n)) return 'mobile';
+    return 'autre';
+  }
+  const opNet = name => String(name || '').replace(/^(dépôt|depot|retrait|envoi)\s+(de\s+)?/i, '').trim();
+  const uniq = list => list.filter((x, i) => x && list.findIndex(y => norm(y) === norm(x)) === i);
+
+  function bordereauHtml(r) {
+    const co = company();
+    const ok = r.lines.filter(o => o.status === 'ok');
+    const tot = ok.reduce((s, o) => s + (o.kind === 'caisse' && o.direction === 'sortie' ? -1 : 1) * Number(o.amount), 0);
+    const types = uniq(r.lines.map(bordType));
+    const ck = (on, label) => `<span class="bd-o"><span class="bd-ck ${on ? 'on' : ''}"></span>${esc(label)}</span>`;
+    const boxes = (s, min = 8) => {
+      const ch = String(s || '').replace(/\s+/g, '').split('');
+      if (!ch.length || ch.length > 16) return `<div class="bd-line">${esc(s || '')}</div>`;
+      while (ch.length < min) ch.push('');
+      return `<div class="bd-boxes" style="grid-template-columns:repeat(${ch.length},1fr)">${ch.map(c => `<span>${esc(c)}</span>`).join('')}</div>`;
+    };
+    const num = o => { const d = String(o.details || '').match(/\d[\d\s]{3,}\d/); return d ? d[0].replace(/\s/g, '') : ''; };
+    const prods = S.products.filter(p => p.active);
+    const banks = uniq([...S.accounts.filter(a => a.kind === 'gtp' && a.active).map(a => (a.bank || '').toUpperCase())]);
+
+    const block = o => {
+      const t = bordType(o), n = norm(o.product), out = o.kind === 'caisse' && o.direction === 'sortie';
+      const amt = `<span class="bd-amt">${out ? '− ' : ''}${fmtN(o.amount)} FCFA</span>`;
+      let head = '', body = '';
+      if (t === 'carte') {
+        const bank = o.kind === 'recharge' ? ((acc(o.account_id) || {}).bank || '').toUpperCase() : '';
+        head = 'Carte prépayée';
+        body = `<div class="bd-opts">${ck(o.kind !== 'recharge', 'Achat de carte')}${ck(o.kind === 'recharge', 'Rechargement')}</div>
+          ${banks.length ? `<div class="bd-opts">${uniq([...banks, bank]).map(b => ck(b === bank, b)).join('')}</div>` : ''}
+          <div class="bd-lab">Identifiant (ID) de la carte</div>${boxes(o.card_number || num(o), 0)}
+          ${o.holder_name ? `<div class="bd-lab">Titulaire de la carte</div><div class="bd-line">${esc(o.holder_name)}</div>` : ''}`;
+      } else if (t === 'transfert') {
+        const ops = uniq(['RIA', 'Western Union', 'MoneyGram', ...prods.filter(p => bordType({ product: p.name }) === 'transfert').map(p => opNet(p.name))]);
+        head = o.product;
+        body = `<div class="bd-opts">${ops.map(x => ck(n.includes(norm(x)), x)).join('')}</div>
+          <div class="bd-lab">Code MTCN / PIN</div>${boxes(num(o), 10)}
+          ${o.details && !num(o) ? `<div class="bd-line">${esc(o.details)}</div>` : ''}`;
+      } else if (t === 'mobile') {
+        const nets = uniq(prods.filter(p => bordType({ product: p.name }) === 'mobile').map(p => opNet(p.name)));
+        const me = opNet(o.product);
+        head = 'Dépôt / Retrait';
+        body = `<div class="bd-opts">${ck(/^DEPOT/.test(n), 'Dépôt')}${ck(/^RETRAIT/.test(n), 'Retrait')}</div>
+          <div class="bd-opts">${uniq([...nets, me]).map(x => ck(norm(x) === norm(me), x)).join('')}</div>
+          <div class="bd-lab">Numéro</div>${boxes(num(o))}`;
+      } else if (t === 'credit') {
+        const list = uniq(prods.filter(p => bordType({ product: p.name }) === 'credit').map(p => p.name));
+        head = 'Achat de crédits';
+        body = `<div class="bd-opts">${uniq([...list, o.product]).map(x => ck(norm(x) === n, x)).join('')}</div>
+          ${o.details ? (num(o) ? `<div class="bd-lab">Numéro</div>${boxes(num(o))}` : `<div class="bd-lab">Détails</div><div class="bd-line">${esc(o.details)}</div>`) : ''}`;
+      } else if (t === 'energie') {
+        head = o.product;
+        body = `<div class="bd-lab">Numéro du compteur / code de paiement</div>${num(o) ? boxes(num(o), 11) : `<div class="bd-line">${esc(o.details || '')}</div>`}`;
+      } else {
+        head = o.product || KIND[o.kind];
+        body = o.details ? `<div class="bd-line">${esc(o.details)}</div>` : '';
+      }
+      return `<div class="bd-sec ${o.status !== 'ok' ? 'x' : ''}"><div class="bd-h"><span>${esc(head)}</span>${amt}</div>${body}
+        ${o.status !== 'ok' ? '<div class="bd-cancel">ANNULÉ</div>' : ''}</div>`;
+    };
+
+    const TITLES = { carte: ['CARTES PRÉPAYÉES', ok.some(o => o.kind !== 'recharge') ? 'Achat - Rechargement' : 'Rechargement'],
+      transfert: [r.lines.every(o => /^RETRAIT/.test(norm(o.product))) ? 'BORDEREAU DE RETRAIT' : r.lines.every(o => /^ENVOI/.test(norm(o.product))) ? 'BORDEREAU D’ENVOI' : 'TRANSFERT D’ARGENT',
+        'RIA · Western Union · MoneyGram'], mobile: ['DÉPÔT / RETRAIT', 'Mobile Money'],
+      credit: ['ACHAT DE CRÉDITS', 'Recharge et forfaits'], energie: ['LAFIA / CASH POWER', 'Électricité'] };
+    const [title, sub] = types.length === 1 && TITLES[types[0]] ? TITLES[types[0]] : [(co.title || 'REÇU').toUpperCase(), 'Opérations du client'];
+    const payName = r.pay_kind === 'caisse' ? 'Espèces' : (r.pay_kind === 'banque' ? 'Versement bancaire' : r.pay_account);
+    const info = [co.address && 'Siège : ' + co.address, co.rccm && 'RCCM : ' + co.rccm, co.nif && 'NIF : ' + co.nif, co.bank && co.bank,
+      co.phone && 'Tél : ' + co.phone, co.whatsapp && 'WhatsApp : ' + co.whatsapp, co.website].filter(Boolean);
+    return `<div class="bd">
+      <div class="bd-top"><img src="icons/logo.png" alt="${esc(co.name)}">
+        <div class="bd-no"><b>N° ${pad(r.id)}</b><br>${fmtDate(isoDay(new Date(r.created_at)))}<br>${fmtTime(r.created_at)}</div></div>
+      ${co.slogan || info.length ? `<div class="bd-info">${co.slogan ? `<b>${esc(co.slogan)}</b>${info.length ? ' | ' : ''}` : ''}${esc(info.join(' - '))}</div>` : ''}
+      <div class="bd-title">${esc(title)}</div><div class="bd-sub">${esc(sub)}</div>
+      <div class="bd-sec"><div class="bd-h"><span>Client</span></div>
+        <div class="bd-lab">Nom & prénom(s)</div><div class="bd-line">${esc(r.client_name || '')}</div>
+        <div class="bd-lab">Téléphone</div><div class="bd-line">${esc(r.client_phone || '')}</div></div>
+      ${r.lines.map(block).join('')}
+      <div class="bd-h bd-h2"><span>Détail des montants</span></div>
+      <div class="bd-tot"><span>${tot >= 0 ? 'Montant total à payer' : 'Montant total remis'}</span><b>${fmtN(Math.abs(tot))} FCFA</b></div>
+      <div class="bd-lab">Montant total en lettres</div><div class="bd-line bd-words">${esc(enLettres(tot))}</div>
+      ${tot > 0 ? `<div class="bd-pay"><span>Payé en : <b>${esc(payName || '')}</b></span>${r.received != null ? `<span>Reçu : <b>${fmtN(r.received)}</b></span><span>Rendu : <b>${fmtN(r.received - tot)}</b></span>` : ''}</div>` : ''}
+      <div class="bd-h bd-h2"><span>Validation & signatures</span></div>
+      <div class="bd-sign"><div><span>Signature du client</span></div><div><span>Signature & cachet du caissier</span><small>${esc(r.agent || '')}</small></div></div>
+      ${co.footer ? `<div class="bd-foot">${esc(co.footer)}</div>` : ''}
+    </div>`;
+  }
+  function printBordereau(r) {
+    const root = document.getElementById('print-root');
+    root.className = 'dl';
+    root.innerHTML = bordereauHtml(r);
+    let st = document.getElementById('pagestyle');
+    if (!st) { st = document.createElement('style'); st.id = 'pagestyle'; document.head.append(st); }
+    st.textContent = '@page { size: 99mm 210mm; margin: 0; }';
+    const img = root.querySelector('img');
+    const go = () => setTimeout(() => window.print(), 50);
+    if (img && !img.complete) { img.onload = go; img.onerror = go; } else go();
+  }
+
   async function sheetReceipt(id, opts = {}) {
     const r = await rpc('get_receipt', { id });
+    let mode = store('rec-mode') === 'ticket' ? 'ticket' : 'bord';
+    const draw = c => {
+      c.q('#recbox').innerHTML = mode === 'bord' ? `<div class="bd-wrap">${bordereauHtml(r)}</div>` : `<div class="ticket">${receiptHtml(r)}</div>`;
+      c.qa('[data-chip=rmode]').forEach(b => b.classList.toggle('on', b.dataset.v === mode));
+    };
+    const doPrint = () => mode === 'bord' ? printBordereau(r) : printReceipt(r);
     sheet({
       title: `Reçu N° ${pad(r.id)}`,
-      body: `<div class="ticket">${receiptHtml(r)}</div>`,
+      body: `<div class="chips" style="justify-content:center;margin-bottom:12px">
+          <button type="button" class="chip" data-chip="rmode" data-v="bord">Bordereau (DL)</button>
+          <button type="button" class="chip" data-chip="rmode" data-v="ticket">Ticket</button></div>
+        <div id="recbox"></div>`,
       foot: `${opts.client !== undefined ? '<button class="btn" data-x="again">Nouvelle opération</button>' : ''}
         <button class="btn" data-x="wa">${icon('chat')} WhatsApp</button>
         <button class="btn primary" data-x="print">${icon('print')} Imprimer <span class="kbd only-desktop">P</span></button>`,
       onMount(c) {
-        c.q('[data-x=print]').onclick = () => printReceipt(r);
+        draw(c);
+        c.qa('[data-chip=rmode]').forEach(b => b.onclick = () => { mode = b.dataset.v; store('rec-mode', mode); draw(c); });
+        c.q('[data-x=print]').onclick = doPrint;
         c.q('[data-x=wa]').onclick = () => whatsappReceipt(r);
         const ag = c.q('[data-x=again]');
         if (ag) ag.onclick = () => { c.close(); sheetVente(opts.client ? { client: opts.client } : {}); };
         c.onKey = e => {
-          if ((e.key === 'p' || e.key === 'P') && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) { e.preventDefault(); printReceipt(r); }
+          if ((e.key === 'p' || e.key === 'P') && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) { e.preventDefault(); doPrint(); }
           if ((e.key === 'n' || e.key === 'N') && ag) { e.preventDefault(); ag.click(); }
         };
       },
@@ -1133,15 +1284,21 @@
     sheet({
       title: 'Reçu et coordonnées',
       body: `${field('Nom de l’entreprise', `<input class="input" name="name" value="${esc(co.name)}">`)}
-        ${field('Adresse', `<input class="input" name="address" value="${esc(co.address)}" placeholder="Quartier, ville">`)}
-        ${field('Téléphone', `<input class="input" name="phone" value="${esc(co.phone)}">`)}
+        ${field('Slogan', `<input class="input" name="slogan" value="${esc(co.slogan)}" placeholder="Le Spécialiste des Paiements en Ligne">`)}
+        ${field('Adresse du siège', `<input class="input" name="address" value="${esc(co.address)}" placeholder="Quartier, ville">`)}
+        <div class="grid2">${field('Téléphone', `<input class="input" name="phone" value="${esc(co.phone)}">`)}
+          ${field('WhatsApp', `<input class="input" name="whatsapp" value="${esc(co.whatsapp)}">`)}</div>
+        <div class="grid2">${field('RCCM', `<input class="input" name="rccm" value="${esc(co.rccm)}">`)}
+          ${field('NIF', `<input class="input" name="nif" value="${esc(co.nif)}">`)}</div>
+        ${field('Compte bancaire (facultatif)', `<input class="input" name="bank" value="${esc(co.bank)}" placeholder="ex. Ecobank : TG055 …">`)}
+        ${field('Site Internet', `<input class="input" name="website" value="${esc(co.website)}" placeholder="www.ayael-entreprise.com">`)}
         ${field('Titre du document', `<input class="input" name="title" value="${esc(co.title)}">`, 'ex. REÇU, TICKET, FACTURE')}
         ${field('Message en bas du reçu', `<input class="input" name="footer" value="${esc(co.footer)}">`)}
         ${field('Format d’impression', `<select class="input" name="format">${options([['80mm', 'Ticket 80 mm (imprimante de caisse)'], ['58mm', 'Ticket 58 mm (petite imprimante)'], ['A4', 'Page A4 (imprimante de bureau)']], co.format)}</select>`)}`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
-          const v = {}; ['name', 'address', 'phone', 'title', 'footer', 'format'].forEach(k => { v[k] = c.q(`[name=${k}]`).value.trim(); });
+          const v = {}; ['name', 'slogan', 'address', 'phone', 'whatsapp', 'rccm', 'nif', 'bank', 'website', 'title', 'footer', 'format'].forEach(k => { v[k] = c.q(`[name=${k}]`).value.trim(); });
           await rpc('save_settings', { key: 'company', value: v });
           S.settings.company = v; c.close(); toast('Réglages du reçu enregistrés.', 'ok');
         });
