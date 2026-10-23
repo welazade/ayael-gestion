@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '12';
+  const DEMO_SCHEMA_VERSION = '13';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -101,8 +101,12 @@
     }
   }
   const PERIODS = [['today', 'Aujourd’hui'], ['yesterday', 'Hier'], ['7d', '7 jours'], ['month', 'Ce mois'], ['lastmonth', 'Mois dernier'], ['year', 'Cette année'], ['custom', 'Dates…']];
-  const KIND = { caisse: 'Caisse', recharge: 'Recharge', approvisionnement: 'Approvisionnement', depense: 'Dépense', ajustement: 'Ajustement', transfert: 'Transfert', cloture: 'Remise de caisse' };
-  const ACCOUNT_KIND = { gtp: 'Compte GTP', electronique: 'Compte électronique', caisse: 'Caisse d’agent', coffre: 'Coffre', banque: 'Banque', fournisseur: 'Fournisseur' };
+  const KIND = { caisse: 'Caisse', recharge: 'Recharge', approvisionnement: 'Approvisionnement', depense: 'Dépense', ajustement: 'Ajustement', transfert: 'Transfert', cloture: 'Remise de caisse', avoir: 'Monnaie client' };
+  // Niveau de fidélité selon les points (1 point par passage en caisse).
+  const LEVELS = [[50, 'Or', 'gold'], [20, 'Argent', 'silver'], [5, 'Bronze', 'bronze']];
+  const level = pts => LEVELS.find(l => Number(pts) >= l[0]) || null;
+  const levelTag = pts => { const l = level(pts); return l ? `<span class="tag lvl ${l[2]}">${l[1]}</span>` : ''; };
+  const ACCOUNT_KIND = { gtp: 'Compte GTP', electronique: 'Compte électronique', caisse: 'Caisse d’agent', coffre: 'Coffre', banque: 'Banque', fournisseur: 'Fournisseur', avoir: 'Monnaie des clients' };
   const DEP_CATS = ['Transport', 'Repas', 'Fournitures', 'Électricité / eau', 'Loyer', 'Salaire / avance', 'Autre'];
 
   function commission(a, amt) {
@@ -668,6 +672,13 @@
       case 'cloture':
         Object.assign(r, { sym: icon('lock'), title: 'Remise de caisse', sub: o.details || '' });
         break;
+      case 'avoir': {
+        const inn = o.category === 'garde' || o.category === 'depot';
+        const t = { garde: 'Monnaie gardée', depot: 'Dépôt sur compte client', utilise: 'Payé avec la monnaie du client', rendu: 'Monnaie rendue' }[o.category] || 'Monnaie client';
+        Object.assign(r, { ico: inn ? 'in' : 'out', sym: icon('user'), title: `${t}${o.client_name ? ' · ' + o.client_name : ''}`, sign: inn ? 1 : -1,
+          sub: inn ? 'espèces gardées en caisse, dues au client' : 'pris sur le compte du client' });
+        break;
+      }
     }
     return r;
   }
@@ -796,7 +807,8 @@
       if (st.client) {
         const cl = st.client;
         box.innerHTML = `<div class="clientcard"><div class="ico rc">${esc(initials(cl.name))}</div>
-          <div class="main"><div class="t">${esc(cl.name)}</div><div class="s">${esc([cl.phone, activeCards(cl).length ? activeCards(cl).length + ' carte(s) active(s)' : 'aucune carte active'].filter(Boolean).join(' · '))}</div></div>
+          <div class="main"><div class="t">${esc(cl.name)} ${levelTag(cl.points)}</div><div class="s">${esc([cl.phone, activeCards(cl).length ? activeCards(cl).length + ' carte(s) active(s)' : 'aucune carte active',
+            cl.points ? cl.points + ' point(s)' : ''].filter(Boolean).join(' · '))}${Number(cl.avoir) > 0 ? ` · <b class="pos">solde ${fmt(cl.avoir)}</b>` : ''}</div></div>
           <button class="btn small" type="button" id="vchg">Changer</button></div>`;
         $('#vchg').onclick = () => { st.client = null; drawClient(); drawFields(); $('#vcq').focus(); };
         return;
@@ -819,7 +831,8 @@
         const res = await rpc('search_clients', { q, limit: 8 });
         if (inp.value.trim() !== q) return;
         res.forEach(x => S.clients.set(x.id, x));
-        opts = res.map(x => ({ t: esc(x.name), s: esc([x.phone, ...activeCards(x).map(k => `${k.bank} ${k.card_number}`)].filter(Boolean).join(' · ')) || 'pas de carte active',
+        opts = res.map(x => ({ t: esc(x.name) + (Number(x.avoir) > 0 ? ` <span class="tag green">solde ${fmt(x.avoir)}</span>` : '') + ' ' + levelTag(x.points),
+          s: esc([x.phone, ...activeCards(x).map(k => `${k.bank} ${k.card_number}`)].filter(Boolean).join(' · ')) || 'pas de carte active',
           go: () => { st.client = x; st.passName = ''; drawClient(); drawFields(); $('#vprod').focus(); } }));
         opts.push({ t: `＋ Créer le client « ${esc(q.toUpperCase())} »`, s: 'Nouvelle fiche client (nom, téléphone)',
           go: () => sheetClientEdit({ name: q }, saved => { st.client = saved; drawClient(); drawFields(); $('#vprod').focus(); }) });
@@ -934,22 +947,48 @@
       const t = total();
       $('#vtot').innerHTML = st.lines.length ? `<div class="vtotal"><span>${t >= 0 ? 'Total à payer' : 'Total à remettre au client'}</span><span class="num">${fmt(Math.abs(t))}</span></div>` : '';
       const showPay = st.lines.some(l => l.sign > 0) && t > 0;
+      const solde = st.client ? Number(st.client.avoir) || 0 : 0;
       $('#vpay').innerHTML = showPay ? `
         <div class="field"><span>Payé en</span><div class="chips wrap">${pays.map(p => `<button type="button" class="chip ${p[0] === st.pay ? 'on' : ''}" data-chip="vpay" data-v="${p[0]}">${esc(p[1])}</button>`).join('')}</div></div>
-        <div class="grid2 ${st.pay === S.me.caisse_id ? '' : 'hidden'}" id="vcash">
-          ${field('Reçu du client', moneyInput('vrec'))}
-          <div class="field"><span>Monnaie à rendre</span><div class="change num" id="vchange">—</div></div></div>` : '';
+        <div class="${st.pay === S.me.caisse_id ? '' : 'hidden'}" id="vcash">
+          ${solde > 0 ? `<div class="avbox"><label class="check"><input type="checkbox" id="vavon"> Utiliser sa monnaie (solde ${fmt(solde)})</label>
+            <div class="hidden" id="vavf">${field('Montant pris sur son compte', moneyInput('vavu'))}</div></div>` : ''}
+          <div id="vdue" class="small muted" style="margin:-4px 0 10px"></div>
+          <div class="grid2">${field('Reçu du client', moneyInput('vrec'))}
+            <div class="field"><span>Monnaie à rendre</span><div class="change num" id="vchange">—</div></div></div>
+          ${st.client ? `<div class="avbox hidden" id="vkeepbox"><label class="check"><input type="checkbox" id="vkeep"> Garder la monnaie sur son compte (pas de monnaie en caisse)</label>
+            <div class="hidden" id="vkeepf">${field('Montant gardé pour le client', moneyInput('vkeepamt'))}</div></div>` : ''}
+        </div>` : '';
       if (showPay) {
         bindMoney($('#vpay'));
         chipGroup(c, 'vpay', v => { st.pay = Number(v); $('#vcash').classList.toggle('hidden', st.pay !== S.me.caisse_id); });
-        const r = $('[name=vrec]');
-        r.addEventListener('input', () => {
+        const r = $('[name=vrec]'), avOn = $('#vavon'), avU = $('[name=vavu]'), kOn = $('#vkeep'), kAmt = $('[name=vkeepamt]');
+        let keepEdited = false;
+        const upd = () => {
+          const u = avOn && avOn.checked ? Math.min(parseAmt(avU.value) || 0, solde, t) : 0;
+          const due = t - u;
+          $('#vdue').innerHTML = u ? `Pris sur son compte : <b>${fmt(u)}</b> · reste à payer : <b>${fmt(due)}</b>` : '';
           const v = parseAmt(r.value), ch = $('#vchange');
-          ch.textContent = v == null ? '—' : v < t ? `Manque ${fmt(t - v)}` : fmt(v - t);
-          ch.className = 'change num ' + (v != null && v < t ? 'neg' : 'pos');
-        });
+          const change = v == null ? null : v - due;
+          const kb = $('#vkeepbox');
+          if (kb) kb.classList.toggle('hidden', !(change > 0));
+          let k = 0;
+          if (kOn && kOn.checked && change > 0) {
+            if (!keepEdited) kAmt.value = fmtN(change);
+            k = Math.min(parseAmt(kAmt.value) || 0, change);
+          }
+          ch.textContent = v == null ? '—' : v < due ? `Manque ${fmt(due - v)}` : fmt(change - k) + (k ? ` (+ ${fmt(k)} gardés)` : '');
+          ch.className = 'change num ' + (v != null && v < due ? 'neg' : 'pos');
+          st.avUse = u; st.avKeep = k;
+        };
+        if (avOn) avOn.onchange = () => { $('#vavf').classList.toggle('hidden', !avOn.checked); if (avOn.checked && !avU.value) avU.value = fmtN(Math.min(solde, t)); upd(); };
+        if (avU) avU.addEventListener('input', upd);
+        if (kOn) kOn.onchange = () => { $('#vkeepf').classList.toggle('hidden', !kOn.checked); keepEdited = false; upd(); };
+        if (kAmt) kAmt.addEventListener('input', () => { keepEdited = true; upd(); });
+        r.addEventListener('input', upd);
         r.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('[data-x=ok]').click(); } });
-      }
+        upd();
+      } else { st.avUse = 0; st.avKeep = 0; }
     }
 
     $('#vprod').onchange = e => { st.sel = e.target.value; drawFields(); };
@@ -957,10 +996,12 @@
       if (st.sel && $('[name=vamt]') && parseAmt($('[name=vamt]').value)) { if (!addLine()) return; }
       if (!st.lines.length) throw new Error('Ajoutez au moins un produit.');
       const t = total();
-      const rec = $('[name=vrec]') && st.pay === S.me.caisse_id ? parseAmt($('[name=vrec]').value) : null;
-      if (rec != null && t > 0 && rec < t) throw new Error(`Le client a donné ${fmt(rec)} : il manque ${fmt(t - rec)}.`);
+      const cash = st.pay === S.me.caisse_id;
+      const rec = $('[name=vrec]') && cash ? parseAmt($('[name=vrec]').value) : null;
+      const u = cash ? st.avUse || 0 : 0, k = cash && rec != null ? st.avKeep || 0 : 0;
+      if (rec != null && t > 0 && rec < t - u) throw new Error(`Le client a donné ${fmt(rec)} : il manque ${fmt(t - u - rec)}.`);
       const payload = { client_id: st.client ? st.client.id : null, client_name: st.client ? null : (st.passName || null),
-        pay_account_id: st.pay, received: rec,
+        pay_account_id: st.pay, received: rec, avoir_use: u, avoir_keep: k,
         lines: st.lines.map(l => l.type === 'recharge'
           ? { type: 'recharge', card_id: l.card_id, gtp_id: l.gtp_id, amount: l.amount, commission: l.commission }
           : { type: 'caisse', product_id: l.product_id, amount: l.amount, details: l.details, counter_account_id: l.counter_account_id }) };
@@ -968,8 +1009,9 @@
         const r = await rpc('op_vente', payload);
         if (r.ok) {
           const client = st.client;
+          if (client) { if (r.avoir != null) client.avoir = r.avoir; client.points = (Number(client.points) || 0) + 1; client.last_at = new Date().toISOString(); }
           c.close();
-          toast(`Opération enregistrée : ${fmt(Math.abs(r.total))}.`, 'ok');
+          toast(`Opération enregistrée : ${fmt(Math.abs(r.total))}.${(u || k) && r.avoir != null ? ` Solde du client : ${fmt(r.avoir)}.` : ''}`, 'ok');
           refreshNow();
           sheetReceipt(r.receipt_id, { client });
           return;
@@ -1021,7 +1063,10 @@
       <hr>${r.lines.map(receiptLine).join('')}<hr>
       <div class="l big"><span>${tot >= 0 ? 'TOTAL' : 'TOTAL REMIS'}</span><span>${fmt(Math.abs(tot))}</span></div>
       ${tot > 0 ? `<div class="l"><span>Payé en</span><span>${esc(payName || '')}</span></div>` : ''}
-      ${r.received != null && tot > 0 ? `<div class="l"><span>Reçu</span><span>${fmt(r.received)}</span></div><div class="l"><span>Rendu</span><span>${fmt(r.received - tot)}</span></div>` : ''}
+      ${Number(r.avoir_used) ? `<div class="l"><span>Pris sur son compte</span><span>${fmt(r.avoir_used)}</span></div>` : ''}
+      ${r.received != null && tot > 0 ? `<div class="l"><span>Reçu</span><span>${fmt(r.received)}</span></div><div class="l"><span>Rendu</span><span>${fmt(r.change_given)}</span></div>` : ''}
+      ${Number(r.avoir_kept) ? `<div class="l"><span>Gardé sur son compte</span><span>${fmt(r.avoir_kept)}</span></div>` : ''}
+      ${r.client_avoir != null && (Number(r.client_avoir) || Number(r.avoir_used) || Number(r.avoir_kept)) ? `<div class="l"><span>Solde du client</span><span>${fmt(r.client_avoir)}</span></div>` : ''}
       <hr>${co.footer ? `<div class="c">${esc(co.footer)}</div>` : ''}`;
   }
   function printReceipt(r) {
@@ -1096,81 +1141,63 @@
     const ok = r.lines.filter(o => o.status === 'ok');
     const tot = ok.reduce((s, o) => s + (o.kind === 'caisse' && o.direction === 'sortie' ? -1 : 1) * Number(o.amount), 0);
     const types = uniq(r.lines.map(bordType));
-    const ck = (on, label) => `<span class="bd-o"><span class="bd-ck ${on ? 'on' : ''}"></span>${esc(label)}</span>`;
-    const boxes = (s, min = 8) => {
-      const ch = String(s || '').replace(/\s+/g, '').split('');
-      if (!ch.length || ch.length > 16) return `<div class="bd-line">${esc(s || '')}</div>`;
-      while (ch.length < min) ch.push('');
-      return `<div class="bd-boxes" style="grid-template-columns:repeat(${ch.length},1fr)">${ch.map(c => `<span>${esc(c)}</span>`).join('')}</div>`;
-    };
     const num = o => { const d = String(o.details || '').match(/\d[\d\s]{3,}\d/); return d ? d[0].replace(/\s/g, '') : ''; };
-    const prods = S.products.filter(p => p.active);
-    const banks = uniq([...S.accounts.filter(a => a.kind === 'gtp' && a.active).map(a => (a.bank || '').toUpperCase())]);
+    const spaced = (s, g = 4) => esc(String(s || '').replace(/\s+/g, '').replace(new RegExp('(.{' + g + '})(?=.)', 'g'), '$1 '));
+    const kv = (k, v) => v ? `<div class="bd-kv"><span>${esc(k)}</span><b>${v}</b></div>` : '';
 
-    const block = o => {
+    // Une ligne par produit : nom, détails utiles, montant.
+    const line = o => {
       const t = bordType(o), n = norm(o.product), out = o.kind === 'caisse' && o.direction === 'sortie';
-      const amt = `<span class="bd-amt">${out ? '− ' : ''}${fmtN(o.amount)} FCFA</span>`;
-      let head = '', body = '';
+      let name = o.product || KIND[o.kind], rows = '';
       if (t === 'carte') {
         const bank = o.kind === 'recharge' ? ((acc(o.account_id) || {}).bank || '').toUpperCase() : '';
-        head = 'Carte prépayée';
-        body = `<div class="bd-opts">${ck(o.kind !== 'recharge', 'Achat de carte')}${ck(o.kind === 'recharge', 'Rechargement')}</div>
-          ${banks.length ? `<div class="bd-opts">${uniq([...banks, bank]).map(b => ck(b === bank, b)).join('')}</div>` : ''}
-          <div class="bd-lab">Identifiant (ID) de la carte</div>${boxes(o.card_number || num(o), 0)}
-          ${o.holder_name ? `<div class="bd-lab">Titulaire de la carte</div><div class="bd-line">${esc(o.holder_name)}</div>` : ''}`;
+        name = o.kind === 'recharge' ? 'Rechargement de carte' : (o.product || 'Achat de carte');
+        rows = kv('Banque', esc(bank)) + kv('N° de carte', spaced(o.card_number || num(o))) + kv('Titulaire', esc(o.holder_name));
       } else if (t === 'transfert') {
-        const ops = uniq(['RIA', 'Western Union', 'MoneyGram', ...prods.filter(p => bordType({ product: p.name }) === 'transfert').map(p => opNet(p.name))]);
-        head = o.product;
-        body = `<div class="bd-opts">${ops.map(x => ck(n.includes(norm(x)), x)).join('')}</div>
-          <div class="bd-lab">Code MTCN / PIN</div>${boxes(num(o), 10)}
-          ${o.details && !num(o) ? `<div class="bd-line">${esc(o.details)}</div>` : ''}`;
+        rows = kv('Code MTCN / PIN', spaced(num(o))) + (num(o) ? '' : kv('Détails', esc(o.details)));
       } else if (t === 'mobile') {
-        const nets = uniq(prods.filter(p => bordType({ product: p.name }) === 'mobile').map(p => opNet(p.name)));
-        const me = opNet(o.product);
-        head = 'Dépôt / Retrait';
-        body = `<div class="bd-opts">${ck(/^DEPOT/.test(n), 'Dépôt')}${ck(/^RETRAIT/.test(n), 'Retrait')}</div>
-          <div class="bd-opts">${uniq([...nets, me]).map(x => ck(norm(x) === norm(me), x)).join('')}</div>
-          <div class="bd-lab">Numéro</div>${boxes(num(o))}`;
-      } else if (t === 'credit') {
-        const list = uniq(prods.filter(p => bordType({ product: p.name }) === 'credit').map(p => p.name));
-        head = 'Achat de crédits';
-        body = `<div class="bd-opts">${uniq([...list, o.product]).map(x => ck(norm(x) === n, x)).join('')}</div>
-          ${o.details ? (num(o) ? `<div class="bd-lab">Numéro</div>${boxes(num(o))}` : `<div class="bd-lab">Détails</div><div class="bd-line">${esc(o.details)}</div>`) : ''}`;
+        rows = kv('Réseau', esc(opNet(o.product))) + kv('Numéro', spaced(num(o), 2)) + (num(o) ? '' : kv('Détails', esc(o.details)));
       } else if (t === 'energie') {
-        head = o.product;
-        body = `<div class="bd-lab">Numéro du compteur / code de paiement</div>${num(o) ? boxes(num(o), 11) : `<div class="bd-line">${esc(o.details || '')}</div>`}`;
+        rows = kv('Compteur / code', spaced(num(o)) || esc(o.details));
       } else {
-        head = o.product || KIND[o.kind];
-        body = o.details ? `<div class="bd-line">${esc(o.details)}</div>` : '';
+        rows = num(o) && /^\d+$/.test(String(o.details).replace(/\s/g, '')) ? kv('Numéro', spaced(num(o), 2)) : kv('Détails', esc(o.details));
       }
-      return `<div class="bd-sec ${o.status !== 'ok' ? 'x' : ''}"><div class="bd-h"><span>${esc(head)}</span>${amt}</div>${body}
-        ${o.status !== 'ok' ? '<div class="bd-cancel">ANNULÉ</div>' : ''}</div>`;
+      return `<div class="bd-item ${o.status !== 'ok' ? 'x' : ''}">
+        <div class="bd-row"><span class="bd-name">${esc(name)}${o.status !== 'ok' ? ' <em>(annulé)</em>' : ''}</span><span class="bd-val">${out ? '− ' : ''}${fmtN(o.amount)}</span></div>
+        ${rows}</div>`;
     };
 
-    const TITLES = { carte: ['CARTES PRÉPAYÉES', ok.some(o => o.kind !== 'recharge') ? 'Achat - Rechargement' : 'Rechargement'],
-      transfert: [r.lines.every(o => /^RETRAIT/.test(norm(o.product))) ? 'BORDEREAU DE RETRAIT' : r.lines.every(o => /^ENVOI/.test(norm(o.product))) ? 'BORDEREAU D’ENVOI' : 'TRANSFERT D’ARGENT',
-        'RIA · Western Union · MoneyGram'], mobile: ['DÉPÔT / RETRAIT', 'Mobile Money'],
-      credit: ['ACHAT DE CRÉDITS', 'Recharge et forfaits'], energie: ['LAFIA / CASH POWER', 'Électricité'] };
-    const [title, sub] = types.length === 1 && TITLES[types[0]] ? TITLES[types[0]] : [(co.title || 'REÇU').toUpperCase(), 'Opérations du client'];
+    const TITLES = { carte: ['Cartes prépayées', ok.some(o => o.kind !== 'recharge') ? 'Achat et rechargement' : 'Rechargement'],
+      transfert: [r.lines.every(o => /^RETRAIT/.test(norm(o.product))) ? 'Bordereau de retrait' : r.lines.every(o => /^ENVOI/.test(norm(o.product))) ? 'Bordereau d’envoi' : 'Transfert d’argent',
+        'RIA · Western Union · MoneyGram'],
+      mobile: [r.lines.every(o => /^DEPOT/.test(norm(o.product))) ? 'Dépôt' : r.lines.every(o => /^RETRAIT/.test(norm(o.product))) ? 'Retrait' : 'Dépôt / Retrait', 'Mobile Money'],
+      credit: ['Achat de crédits', 'Recharge et forfaits'], energie: ['Lafia / Cash Power', 'Électricité'] };
+    const [title, sub] = types.length === 1 && TITLES[types[0]] ? TITLES[types[0]] : [co.title ? co.title.charAt(0).toUpperCase() + co.title.slice(1).toLowerCase() : 'Reçu', ''];
     const payName = r.pay_kind === 'caisse' ? 'Espèces' : (r.pay_kind === 'banque' ? 'Versement bancaire' : r.pay_account);
-    const info = [co.address && 'Siège : ' + co.address, co.rccm && 'RCCM : ' + co.rccm, co.nif && 'NIF : ' + co.nif, co.bank && co.bank,
-      co.phone && 'Tél : ' + co.phone, co.whatsapp && 'WhatsApp : ' + co.whatsapp, co.website].filter(Boolean);
+    const info = [co.address, co.phone && 'Tél. ' + co.phone, co.whatsapp && 'WhatsApp ' + co.whatsapp, co.website,
+      co.rccm && 'RCCM ' + co.rccm, co.nif && 'NIF ' + co.nif, co.bank].filter(Boolean);
     return `<div class="bd">
       <div class="bd-top"><img src="icons/logo.png" alt="${esc(co.name)}">
-        <div class="bd-no"><b>N° ${pad(r.id)}</b><br>${fmtDate(isoDay(new Date(r.created_at)))}<br>${fmtTime(r.created_at)}</div></div>
-      ${co.slogan || info.length ? `<div class="bd-info">${co.slogan ? `<b>${esc(co.slogan)}</b>${info.length ? ' | ' : ''}` : ''}${esc(info.join(' - '))}</div>` : ''}
-      <div class="bd-title">${esc(title)}</div><div class="bd-sub">${esc(sub)}</div>
-      <div class="bd-sec"><div class="bd-h"><span>Client</span></div>
-        <div class="bd-lab">Nom & prénom(s)</div><div class="bd-line">${esc(r.client_name || '')}</div>
-        <div class="bd-lab">Téléphone</div><div class="bd-line">${esc(r.client_phone || '')}</div></div>
-      ${r.lines.map(block).join('')}
-      <div class="bd-h bd-h2"><span>Détail des montants</span></div>
-      <div class="bd-tot"><span>${tot >= 0 ? 'Montant total à payer' : 'Montant total remis'}</span><b>${fmtN(Math.abs(tot))} FCFA</b></div>
-      <div class="bd-lab">Montant total en lettres</div><div class="bd-line bd-words">${esc(enLettres(tot))}</div>
-      ${tot > 0 ? `<div class="bd-pay"><span>Payé en : <b>${esc(payName || '')}</b></span>${r.received != null ? `<span>Reçu : <b>${fmtN(r.received)}</b></span><span>Rendu : <b>${fmtN(r.received - tot)}</b></span>` : ''}</div>` : ''}
-      <div class="bd-h bd-h2"><span>Validation & signatures</span></div>
-      <div class="bd-sign"><div><span>Signature du client</span></div><div><span>Signature & cachet du caissier</span><small>${esc(r.agent || '')}</small></div></div>
-      ${co.footer ? `<div class="bd-foot">${esc(co.footer)}</div>` : ''}
+        <div class="bd-no"><span>N° ${pad(r.id)}</span>${fmtDate(isoDay(new Date(r.created_at)))} · ${fmtTime(r.created_at)}</div></div>
+      ${co.slogan ? `<div class="bd-slogan">${esc(co.slogan)}</div>` : ''}
+      <div class="bd-title">${esc(title)}</div>${sub ? `<div class="bd-sub">${esc(sub)}</div>` : ''}
+      <div class="bd-block">
+        <div class="bd-cap">Client</div>
+        <div class="bd-client">${esc(r.client_name || 'Client de passage')}</div>
+        ${r.client_phone ? `<div class="bd-muted">${esc(r.client_phone)}</div>` : ''}
+      </div>
+      <div class="bd-block">
+        <div class="bd-cap bd-cap2"><span>Désignation</span><span>Montant (FCFA)</span></div>
+        ${r.lines.map(line).join('')}
+      </div>
+      <div class="bd-total"><span>${tot >= 0 ? 'Total à payer' : 'Total remis'}</span><b>${fmtN(Math.abs(tot))} FCFA</b></div>
+      <div class="bd-words">${esc(enLettres(tot))}</div>
+      ${tot > 0 ? `<div class="bd-block bd-pay">${kv('Payé en', esc(payName || ''))}${Number(r.avoir_used) ? kv('Pris sur son compte', fmtN(r.avoir_used)) : ''}
+        ${r.received != null ? kv('Reçu', fmtN(r.received)) + kv('Rendu', fmtN(r.change_given)) : ''}${Number(r.avoir_kept) ? kv('Gardé sur son compte', fmtN(r.avoir_kept)) : ''}
+        ${r.client_avoir != null && (Number(r.client_avoir) || Number(r.avoir_used) || Number(r.avoir_kept)) ? kv('Solde du client', fmtN(r.client_avoir) + ' FCFA') : ''}</div>` : ''}
+      <div class="bd-sign"><div><span></span>Signature du client</div><div><span></span>Caissier · ${esc(r.agent || '')}</div></div>
+      <div class="bd-foot">${co.footer ? `<div class="bd-thanks">${esc(co.footer)}</div>` : ''}
+        ${info.length ? `<div>${esc(co.name)} — ${esc(info.join(' · '))}</div>` : ''}</div>
     </div>`;
   }
   function printBordereau(r) {
@@ -1181,7 +1208,7 @@
     if (!st) { st = document.createElement('style'); st.id = 'pagestyle'; document.head.append(st); }
     st.textContent = '@page { size: 99mm 210mm; margin: 0; }';
     const img = root.querySelector('img');
-    const go = () => setTimeout(() => window.print(), 50);
+    const go = () => (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => setTimeout(() => window.print(), 50));
     if (img && !img.complete) { img.onload = go; img.onerror = go; } else go();
   }
 
@@ -1218,26 +1245,67 @@
   }
 
   // ---------------------------------------------------------------- clients
+  // Lien WhatsApp vers un client (numéro togolais à 8 chiffres complété par 228).
+  const waLink = (phone, text) => {
+    let ph = String(phone || '').replace(/\D/g, '');
+    if (ph.length === 8) ph = '228' + ph;
+    return ph ? `https://wa.me/${ph}${text ? '?text=' + encodeURIComponent(text) : ''}` : '';
+  };
+  const CL_SORTS = [['auto', 'Récents'], ['name', 'A → Z'], ['points', 'Plus fidèles'], ['avoir', 'Avec un solde'], ['idle', 'À relancer']];
+
   async function vClients(m) {
+    const f = S.cl;
+    f.sort = f.sort || 'auto'; f.idle = f.idle || 30;
     m.innerHTML = `
-      <div class="search">${icon('search')}<input class="input" id="clq" placeholder="Nom, téléphone ou n° de carte" value="${esc(S.cl.q)}" autocomplete="off"></div>
+      <div class="search">${icon('search')}<input class="input" id="clq" placeholder="Nom, téléphone ou n° de carte" value="${esc(f.q)}" autocomplete="off"></div>
+      <div class="chips">${CL_SORTS.map(([k, l]) => `<button class="chip ${f.sort === k ? 'on' : ''}" data-sort="${k}">${l}</button>`).join('')}</div>
+      ${f.sort === 'idle' ? `<div class="filters"><select class="input" id="clidle" aria-label="Absents depuis">${options([[30, 'Pas venus depuis 30 jours'], [60, 'Pas venus depuis 60 jours'], [90, 'Pas venus depuis 90 jours'], [180, 'Pas venus depuis 6 mois']], f.idle)}</select></div>
+        <div class="alert info"><span>Les clients fidèles qui ne viennent plus, les plus fidèles en premier. Touchez <b>WhatsApp</b> pour leur écrire.</span></div>` : ''}
+      ${f.sort === 'points' ? `<p class="small muted" style="margin:0 4px 10px">1 point par passage en caisse · Bronze dès 5 points, Argent dès 20, Or dès 50.</p>` : ''}
       <div id="clres"><div class="spinner"></div></div>
       <button class="btn block" id="clnew" style="margin-top:12px">${icon('plus')} Nouveau client</button>`;
+    m.querySelectorAll('[data-sort]').forEach(b => b.onclick = () => { f.sort = b.dataset.sort; route(); });
+    const idl = m.querySelector('#clidle'); if (idl) idl.onchange = () => { f.idle = Number(idl.value); load(); };
     const load = async () => {
-      const res = await rpc('search_clients', { q: S.cl.q, limit: 60 });
+      const res = await rpc('search_clients', { q: f.q, limit: 100, sort: f.sort === 'idle' ? 'idle' : f.sort,
+        idle_days: f.sort === 'idle' ? f.idle : null, with_avoir: f.sort === 'avoir' });
       const box = m.querySelector('#clres'); if (!box) return;
       res.forEach(x => S.clients.set(x.id, x));
-      box.innerHTML = res.length ? `<div class="list">${res.map(x => `<button class="row" data-client="${x.id}">
-          <div class="ico rc">${esc(initials(x.name))}</div>
-          <div class="main"><div class="t">${esc(x.name)}</div>
-            <div class="s">${esc([x.phone, activeCards(x).map(k => `${k.bank} ${k.card_number}`).join(', ') || 'pas de carte active'].filter(Boolean).join(' · '))}${x.last_at ? ' · dernière visite ' + ago(x.last_at) : ''}</div></div>${icon('chev')}</button>`).join('')}</div>
-          ${res.length >= 60 ? '<p class="small muted">60 premiers résultats : précisez la recherche.</p>' : ''}`
-        : '<div class="list"><div class="empty">Aucun client trouvé.</div></div>';
+      const co = company();
+      box.innerHTML = res.length ? `<div class="list">${res.map(x => {
+          const wa = f.sort === 'idle' && waLink(x.phone, `Bonjour ${x.name}, ici ${co.name}. Cela fait un moment ! Nous serons ravis de vous revoir pour vos recharges et transferts.`);
+          return `<div class="row clrow"><button class="rowbtn" data-client="${x.id}">
+            <div class="ico rc">${esc(initials(x.name))}</div>
+            <div class="main"><div class="t">${esc(x.name)} ${levelTag(x.points)}${Number(x.avoir) > 0 ? ` <span class="tag green">solde ${fmt(x.avoir)}</span>` : ''}</div>
+              <div class="s">${esc([x.phone, x.points ? x.points + ' point(s)' : 'aucune visite', x.last_at ? 'dernière visite ' + ago(x.last_at) : '',
+                f.sort === 'auto' || f.sort === 'name' ? activeCards(x).map(k => `${k.bank} ${k.card_number}`).join(', ') : ''].filter(Boolean).join(' · '))}</div></div></button>
+            ${wa ? `<a class="btn small" href="${esc(wa)}" target="_blank" rel="noopener">${icon('chat')} WhatsApp</a>` : icon('chev')}</div>`;
+        }).join('')}</div>
+          ${res.length >= 100 ? '<p class="small muted">100 premiers résultats : précisez la recherche.</p>' : ''}`
+        : `<div class="list"><div class="empty">${f.sort === 'idle' ? 'Aucun client absent depuis cette durée.' : f.sort === 'avoir' ? 'Aucun client n’a de monnaie sur son compte.' : 'Aucun client trouvé.'}</div></div>`;
     };
     const q = m.querySelector('#clq');
-    q.addEventListener('input', debounce(() => { S.cl.q = q.value.trim(); load(); }, 250));
-    m.querySelector('#clnew').onclick = () => sheetClientEdit({ name: S.cl.q }, saved => sheetClient(saved));
+    q.addEventListener('input', debounce(() => { f.q = q.value.trim(); load(); }, 250));
+    m.querySelector('#clnew').onclick = () => sheetClientEdit({ name: f.q }, saved => sheetClient(saved));
     await load();
+  }
+
+  // Rendre au client sa monnaie, ou noter de l'argent qu'il laisse sur son compte.
+  function sheetAvoir(cl, sens, then) {
+    const solde = Number(cl.avoir) || 0;
+    sheet({
+      title: sens === 'rendre' ? 'Rendre sa monnaie au client' : 'Déposer sur le compte du client',
+      body: `<div class="calc"><div style="font-weight:700">${esc(cl.name)}</div><div class="small muted">Solde actuel : ${fmt(solde)}</div></div>
+        ${field('Montant', moneyInput('amount', `autofocus value="${sens === 'rendre' && solde > 0 ? fmtN(solde) : ''}"`),
+          sens === 'rendre' ? 'L’argent sort de votre caisse.' : 'L’argent entre dans votre caisse et sera dû au client.')}`,
+      foot: `<button class="btn primary" data-x="ok">${sens === 'rendre' ? 'Rendre l’argent' : 'Enregistrer le dépôt'}</button>`,
+      onMount(c) {
+        c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          const r = await rpc('op_avoir', { client_id: cl.id, amount: parseAmt(c.q('[name=amount]').value), sens });
+          c.close(); toast(`Enregistré. Solde du client : ${fmt(r.avoir)}`, 'ok'); refreshNow(); if (then) then(r.avoir);
+        });
+      },
+    });
   }
 
   async function sheetClient(cl) {
@@ -1245,12 +1313,24 @@
     sheet({
       title: cl.name, wide: true,
       body: `<div class="cols"><div>
-          <dl class="kv"><dt>Téléphone</dt><dd>${esc(cl.phone || '—')}</dd>${cl.note ? `<dt>Note</dt><dd>${esc(cl.note)}</dd>` : ''}<dt>Opérations</dt><dd>${hist.filter(o => o.status === 'ok').length}${hist.length >= 40 ? '+' : ''}</dd></dl>
+          <div class="kpis" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
+            <div class="kpi"><div class="label">Solde du client</div><div class="value num ${Number(cl.avoir) > 0 ? 'pos' : ''}">${fmt(cl.avoir || 0)}</div><div class="sub">monnaie gardée chez nous</div></div>
+            <div class="kpi"><div class="label">Points fidélité</div><div class="value num">${cl.points || 0} ${levelTag(cl.points)}</div><div class="sub">${cl.first_at ? 'client depuis ' + fmtDate(isoDay(new Date(cl.first_at))) : '1 point par passage'}</div></div>
+          </div>
+          <div class="grid2" style="margin-bottom:12px">
+            <button class="btn small" data-x="dep">${icon('in')} Déposer</button>
+            <button class="btn small" data-x="ren" ${Number(cl.avoir) > 0 ? '' : 'disabled'}>${icon('out')} Rendre sa monnaie</button></div>
+          <dl class="kv"><dt>Téléphone</dt><dd>${esc(cl.phone || '—')}</dd>${cl.note ? `<dt>Note</dt><dd>${esc(cl.note)}</dd>` : ''}
+            <dt>Dernière visite</dt><dd>${cl.last_at ? fmtDT(cl.last_at) : '—'}</dd>
+            <dt>Total des opérations</dt><dd>${fmt(cl.volume || 0)}</dd></dl>
           ${section('Cartes', `<div class="list">${(cl.cards || []).map(k => `<div class="row"><div class="ico rc">${esc(k.bank.slice(0, 3))}</div><div class="main"><div class="t" style="${k.active === false ? 'text-decoration:line-through;color:var(--muted)' : ''}">${esc(k.card_number)}${k.active === false ? ' <span class="tag">inactive</span>' : ''}</div><div class="s">${esc(k.bank)}${k.holder_name !== cl.name ? ' · titulaire ' + esc(k.holder_name) : ''}${k.note ? ' · ' + esc(k.note) : ''}</div></div></div>`).join('') || '<div class="empty">Aucune carte.</div>'}</div>
             <button class="btn block small" data-x="card" style="margin-top:8px">${icon('plus')} Ajouter une carte</button>`)}
         </div><div>${section('Historique', opList(hist, isMgr(), 'Aucune opération.'))}</div></div>`,
       foot: `<button class="btn" data-x="edit">Modifier la fiche</button><button class="btn primary" data-x="op">${icon('plus')} Nouvelle opération</button>`,
       onMount(c) {
+        const reopen = async () => { const r = await rpc('search_clients', { q: cl.phone || cl.name, limit: 10 }); sheetClient(r.find(x => x.id === cl.id) || cl); };
+        c.q('[data-x=dep]').onclick = () => { c.close(); sheetAvoir(cl, 'depot', reopen); };
+        c.q('[data-x=ren]').onclick = () => { c.close(); sheetAvoir(cl, 'rendre', reopen); };
         c.q('[data-x=edit]').onclick = () => { c.close(); sheetClientEdit(cl, saved => sheetClient(saved)); };
         c.q('[data-x=op]').onclick = () => { c.close(); sheetVente({ client: cl }); };
         c.q('[data-x=card]').onclick = () => { c.close(); sheetCard(null, { client: cl, onSaved: async () => { const r = await rpc('search_clients', { q: cl.phone || cl.name, limit: 5 }); sheetClient(r.find(x => x.id === cl.id) || cl); } }); };
@@ -1649,6 +1729,9 @@
       ${d.fournisseurs_du != null && Number(d.fournisseurs_du) > 0 ? section('Fournisseurs', `<div class="list"><a class="row" href="#/fournisseurs"><div class="ico neu">${icon('truck')}</div>
         <div class="main"><div class="t">Nous devons ${fmt(d.fournisseurs_du)} à nos fournisseurs</div><div class="s">Toucher pour le détail et les paiements</div></div>
         <div class="end"><div class="amt num warn">${fmt(d.fournisseurs_du)}</div></div></a></div>`) : ''}
+      ${(() => { const dueCl = -sum(B.filter(b => b.kind === 'avoir')); return dueCl > 0 ? section('Clients', `<div class="list"><a class="row" href="#/clients" data-avoirlist="1"><div class="ico neu">${icon('users')}</div>
+        <div class="main"><div class="t">Monnaie gardée pour les clients : ${fmt(dueCl)}</div><div class="s">Argent en caisse qui appartient aux clients · toucher pour la liste</div></div>
+        <div class="end"><div class="amt num warn">${fmt(dueCl)}</div></div></a></div>`) : ''; })()}
       <div class="cols">
         <div>
           ${section('Soldes GTP', balList(gtp, true), `<span class="num">${fmt(sum(gtp))}</span>`)}
@@ -1661,9 +1744,11 @@
           ${section('En direct', opList(d.recent, true, 'Aucune opération récente.'), '<a href="#/journal" class="small" style="text-transform:none;color:var(--brand-ink)">Tout le journal</a>')}
         </div>
       </div>`;
+    const al = m.querySelector('[data-avoirlist]');
+    if (al) al.onclick = () => { S.cl.sort = 'avoir'; S.cl.q = ''; };
   }
 
-  const balLabel = a => `${a.name} (${fmt(S.bal.get(a.id) ?? 0)})`;
+  const balLabel =a => `${a.name} (${fmt(S.bal.get(a.id) ?? 0)})`;
 
   // ---------------------------------------------------------------- entre agences
   const mainAgence = () => (S.agences || []).find(g => g.is_main) || {};
@@ -2232,7 +2317,7 @@
     sheet({
       title: a ? 'Modifier le compte' : 'Nouveau compte',
       body: `${field('Nom', `<input class="input" name="name" value="${esc(x.name || '')}">`)}
-        ${field('Type', `<select class="input" name="kind" ${a && a.kind === 'caisse' ? 'disabled' : ''}>${options(Object.entries(ACCOUNT_KIND).filter(([k]) => (k !== 'caisse' || x.kind === 'caisse') && k !== 'fournisseur'), x.kind)}</select>`)}
+        ${field('Type', `<select class="input" name="kind" ${a && a.kind === 'caisse' ? 'disabled' : ''}>${options(Object.entries(ACCOUNT_KIND).filter(([k]) => (k !== 'caisse' || x.kind === 'caisse') && k !== 'fournisseur' && k !== 'avoir'), x.kind)}</select>`)}
         ${field('Agence', `<select class="input" name="agence" ${a && a.kind === 'caisse' ? 'disabled' : ''}>${options([['', 'Commun à toutes les agences'], ...(S.agences || []).map(g => [g.id, g.name])], x.agence_id || '')}</select>`,
           'Commun : utilisable par toutes les agences (GTP, Wave, Orange Money, RIA, Western Union…). Sinon : propre à une agence (son Mixx, son Flooz, son coffre).')}
         <div id="gtpf">

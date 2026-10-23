@@ -23,7 +23,7 @@ select import_cards('{"cards":[
 
 update clients set phone = '90 11 22 33' where name = 'YASMINE DAOUDA';
 update clients set phone = '91 22 33 44' where name = 'CHARIFE ISSAKA';
-update settings set value = value || '{"address":"Lomé, Togo (adresse à compléter)","phone":"+228 00 00 00 00"}' where key = 'company';
+update settings set value = value || '{"slogan":"Le Spécialiste des Paiements en Ligne","address":"Sagbado, non loin de la Pharmacie Actuelle","phone":"+228 22 51 91 41","whatsapp":"+228 70 00 25 22","rccm":"TG-LOM 2020 B 2050","nif":"1001698268","website":"www.ayael-entreprise.com","footer":"Merci de votre confiance !"}' where key = 'company';
 
 select op_ajustement(jsonb_build_object('account_id', id, 'target', v, 'details', 'Solde d''ouverture (démo)'))
 from (values ('GTCO principal', 1810631), ('GTCO Ayael CI', 450000), ('UBA AfricSika', 296893), ('Ecobank', 120000),

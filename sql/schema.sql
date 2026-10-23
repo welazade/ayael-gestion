@@ -198,11 +198,20 @@ alter table profiles add column if not exists perm_clotures     boolean not null
 alter table profiles add column if not exists perm_fournisseurs boolean not null default false;
 
 -- Fournisseurs : un compte de type « fournisseur ». Solde négatif = ce que nous lui devons.
-alter table accounts drop constraint if exists accounts_kind_check;
-alter table accounts add constraint accounts_kind_check check (kind in ('gtp','electronique','caisse','coffre','banque','fournisseur'));
 alter table accounts add column if not exists phone text;
 alter table operations add column if not exists fournisseur_id bigint references accounts(id);
 create index if not exists operations_fournisseur_idx on operations(fournisseur_id, created_at desc);
+
+-- Compte client : la monnaie gardée pour un client (« avoir »), réutilisable à sa prochaine visite.
+-- Un seul compte commun « Monnaie des clients » (solde négatif = ce que nous devons aux clients) ;
+-- le solde d'un client = ses opérations « avoir ».
+alter table accounts drop constraint if exists accounts_kind_check;
+alter table accounts add constraint accounts_kind_check check (kind in ('gtp','electronique','caisse','coffre','banque','fournisseur','avoir'));
+alter table operations drop constraint if exists operations_kind_check;
+alter table operations add constraint operations_kind_check
+  check (kind in ('caisse','recharge','approvisionnement','depense','ajustement','transfert','cloture','avoir'));
+alter table receipts add column if not exists avoir_used numeric not null default 0;
+alter table receipts add column if not exists avoir_kept numeric not null default 0;
 
 -- Mise en place des agences sur des données existantes (une seule fois).
 do $$
@@ -840,7 +849,7 @@ begin
     end if;
   elsif me.role <> 'gerante' then
     if o.user_id is distinct from me.id or o.created_at < now() - interval '30 minutes' or o.closing_id is not null
-       or o.kind not in ('caisse','recharge','depense') then
+       or o.kind not in ('caisse','recharge','depense','avoir') then
       raise exception 'Seul(e) le gérant ou la gérante peut annuler cette opération (délai de 30 minutes dépassé ou caisse clôturée).';
     end if;
   end if;
@@ -1046,6 +1055,7 @@ begin
     'summary', (
       select coalesce(jsonb_agg(jsonb_build_object('label', label, 'n', n, 'in', vin, 'out', vout) order by label), '[]') from (
         select coalesce(pr.name, case o.kind when 'recharge' then 'Recharges ' || a.name when 'depense' then 'Dépenses'
+                                    when 'avoir' then 'Monnaie des clients'
                                     else initcap(o.kind) end) as label,
                count(distinct o.id) as n,
                coalesce(sum(m.amount) filter (where m.amount > 0), 0) as vin,
@@ -1411,30 +1421,86 @@ end $$;
 -- ---------- Clients, ventes et reçus ------------------------------------------
 
 -- Recherche par nom (tous les mots, dans n'importe quel ordre), téléphone ou n° de carte.
+-- Solde du compte d'un client (monnaie gardée pour lui, que nous lui devons).
+create or replace function _client_avoir(cid bigint) returns numeric
+language sql stable security definer set search_path = public as $$
+  select coalesce(-sum(m.amount), 0) from movements m
+  join operations o on o.id = m.operation_id join accounts a on a.id = m.account_id
+  where a.kind = 'avoir' and o.client_id = cid
+$$;
+
+-- Clients avec leurs statistiques : points (1 par passage en caisse), dernière visite, total des opérations, solde.
+-- p = { q, limit, sort: auto|name|points|volume|avoir|idle, idle_days, with_avoir }
 create or replace function search_clients(p jsonb default '{}') returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare me profiles; q text := upper(coalesce(_txt(p,'q'), '')); lim int := coalesce(_num(p,'limit')::int, 15);
+        srt text := coalesce(_txt(p,'sort'), 'auto'); idle int := _num(p,'idle_days')::int;
 begin
   me := _require(null);
   return (
+    with st as (
+      select o.client_id, max(o.created_at) as last_at, min(o.created_at) as first_at,
+             count(distinct coalesce('r' || o.receipt_id, 'o' || o.id)) filter (where o.kind <> 'avoir') as points,
+             coalesce(sum(o.amount) filter (where o.kind in ('caisse','recharge')), 0) as volume
+      from operations o where o.status = 'ok' and o.client_id is not null group by o.client_id),
+    av as (
+      select o.client_id, -sum(m.amount) as avoir from movements m
+      join operations o on o.id = m.operation_id join accounts a on a.id = m.account_id
+      where a.kind = 'avoir' and o.client_id is not null group by o.client_id)
     select coalesce(jsonb_agg(x), '[]') from (
       select cl.*,
         (select coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'card_number', c.card_number, 'bank', c.bank,
                  'holder_name', c.holder_name, 'gtp_id', c.gtp_id, 'active', c.active, 'note', c.note)
                  order by c.active desc, c.bank, c.card_number), '[]')
            from cards c where c.client_id = cl.id) as cards,
-        (select max(created_at) from operations o where o.client_id = cl.id and o.status = 'ok') as last_at,
-        (select count(*) from operations o where o.client_id = cl.id and o.status = 'ok') as n_ops
-      from clients cl
+        st.last_at, st.first_at, coalesce(st.points, 0) as points, coalesce(st.points, 0) as n_ops,
+        coalesce(st.volume, 0) as volume, coalesce(av.avoir, 0) as avoir
+      from clients cl left join st on st.client_id = cl.id left join av on av.client_id = cl.id
       where cl.active and (
         q = ''
         or not exists (select 1 from unnest(string_to_array(q, ' ')) w where w <> '' and upper(cl.name) not like '%' || w || '%')
         or replace(coalesce(cl.phone, ''), ' ', '') like '%' || replace(q, ' ', '') || '%'
         or exists (select 1 from cards c where c.client_id = cl.id and c.card_number like replace(q, ' ', '') || '%'))
-      order by (q <> '' and upper(cl.name) like q || '%') desc,
-               (select max(created_at) from operations o where o.client_id = cl.id) desc nulls last,
-               cl.name
+        and (idle is null or (st.last_at is not null and st.last_at < now() - make_interval(days => idle)))
+        and (not coalesce(_bool(p,'with_avoir'), false) or coalesce(av.avoir, 0) > 0)
+      order by
+        case when srt = 'name' then cl.name end,
+        case when srt in ('points','idle') then coalesce(st.points, 0) end desc,
+        case when srt = 'volume' then coalesce(st.volume, 0) end desc,
+        case when srt = 'avoir' then coalesce(av.avoir, 0) end desc,
+        (q <> '' and upper(cl.name) like q || '%') desc,
+        st.last_at desc nulls last,
+        cl.name
       limit lim) x);
+end $$;
+
+-- Compte d'un client, hors vente : il laisse de l'argent (depot) ou on lui rend son argent (rendre).
+-- p = { client_id, amount, sens: depot|rendre, details }
+create or replace function op_avoir(p jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me profiles; cl clients; av accounts; ca accounts; amt numeric := _num(p,'amount'); oid bigint; s text := coalesce(_txt(p,'sens'), 'rendre');
+begin
+  me := _require(null);
+  select * into cl from clients where id = _num(p,'client_id')::bigint;
+  if cl.id is null then raise exception 'Client introuvable.'; end if;
+  if amt is null or amt <= 0 then raise exception 'Montant invalide.'; end if;
+  select * into av from accounts where kind = 'avoir' order by id limit 1;
+  ca := _check_use(me, _caisse_of(me.id));
+  if s = 'rendre' then
+    if amt > _client_avoir(cl.id) then
+      raise exception 'Le client n''a que % F sur son compte.', replace(to_char(_client_avoir(cl.id), 'FM999,999,999,990'), ',', ' ');
+    end if;
+    perform _check_funds(ca, amt);
+    insert into operations(user_id, kind, account_id, account2_id, amount, details, category, client_id)
+    values (me.id, 'avoir', ca.id, av.id, amt, coalesce(_txt(p,'details'), 'Monnaie rendue au client'), 'rendu', cl.id) returning id into oid;
+    insert into movements(operation_id, account_id, amount) values (oid, ca.id, -amt), (oid, av.id, amt);
+  else
+    insert into operations(user_id, kind, account_id, account2_id, amount, details, category, client_id)
+    values (me.id, 'avoir', ca.id, av.id, amt, coalesce(_txt(p,'details'), 'Argent déposé sur le compte du client'), 'depot', cl.id) returning id into oid;
+    insert into movements(operation_id, account_id, amount) values (oid, ca.id, amt), (oid, av.id, -amt);
+  end if;
+  perform _log('operations');
+  return jsonb_build_object('ok', true, 'id', oid, 'avoir', _client_avoir(cl.id));
 end $$;
 
 create or replace function save_client(p jsonb) returns jsonb
@@ -1466,6 +1532,7 @@ create or replace function op_vente(p jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare me profiles; ln jsonb; cl clients; rid bigint; pay bigint; tot numeric := 0; warn jsonb := '[]';
         g accounts; c cards; pr products; amt numeric; com numeric; dup record; r jsonb; bals jsonb := '{}'; after numeric; rec numeric;
+        u numeric := coalesce(_num(p,'avoir_use'), 0); k numeric := coalesce(_num(p,'avoir_keep'), 0); av accounts; due numeric; oid bigint;
 begin
   me := _require(null);
   if jsonb_typeof(p->'lines') is distinct from 'array' or jsonb_array_length(p->'lines') = 0 then
@@ -1517,12 +1584,27 @@ begin
       'can_force_balance', me.role = 'gerante');
   end if;
 
+  -- Monnaie du client : u = utilisée pour payer, k = gardée sur son compte au lieu d'être rendue.
+  if u < 0 or k < 0 then raise exception 'Montant invalide.'; end if;
+  if u > 0 or k > 0 then
+    if cl.id is null then raise exception 'Choisissez le client pour utiliser ou garder sa monnaie.'; end if;
+    if pay is distinct from _caisse_of(me.id) then raise exception 'La monnaie du client s''utilise seulement avec un paiement en espèces.'; end if;
+    select * into av from accounts where kind = 'avoir' order by id limit 1;
+  end if;
+  if u > 0 then
+    if tot <= 0 or u > tot then raise exception 'La monnaie utilisée ne peut pas dépasser le total à payer.'; end if;
+    if u > _client_avoir(cl.id) then
+      raise exception 'Le client n''a que % F sur son compte.', replace(to_char(_client_avoir(cl.id), 'FM999,999,999,990'), ',', ' ');
+    end if;
+  end if;
+  due := tot - u;
   rec := _num(p, 'received');
   if tot <= 0 then rec := null; end if;
-  if rec is not null and rec < tot then raise exception 'Le montant reçu est inférieur au total à payer.'; end if;
+  if rec is not null and rec < due then raise exception 'Le montant reçu est inférieur au total à payer.'; end if;
+  if k > 0 and (rec is null or k > rec - due) then raise exception 'La monnaie gardée ne peut pas dépasser la monnaie à rendre.'; end if;
 
-  insert into receipts(user_id, client_id, client_name, total, received, change_given, pay_account_id)
-  values (me.id, cl.id, coalesce(cl.name, upper(_txt(p,'client_name'))), tot, rec, rec - tot, pay)
+  insert into receipts(user_id, client_id, client_name, total, received, change_given, pay_account_id, avoir_used, avoir_kept)
+  values (me.id, cl.id, coalesce(cl.name, upper(_txt(p,'client_name'))), tot, rec, rec - due - k, pay, u, k)
   returning id into rid;
 
   for ln in select * from jsonb_array_elements(p->'lines') loop
@@ -1540,7 +1622,19 @@ begin
                                         'cash_account_id', case when pr.direction = 'entree' then pay end));
     end if;
   end loop;
-  return jsonb_build_object('ok', true, 'receipt_id', rid, 'total', tot);
+  if u > 0 then
+    insert into operations(user_id, kind, account_id, account2_id, amount, details, category, client_id, receipt_id)
+    values (me.id, 'avoir', pay, av.id, u, 'Payé avec la monnaie du client', 'utilise', cl.id, rid) returning id into oid;
+    insert into movements(operation_id, account_id, amount) values (oid, pay, -u), (oid, av.id, u);
+  end if;
+  if k > 0 then
+    insert into operations(user_id, kind, account_id, account2_id, amount, details, category, client_id, receipt_id)
+    values (me.id, 'avoir', pay, av.id, k, 'Monnaie gardée sur le compte du client', 'garde', cl.id, rid) returning id into oid;
+    insert into movements(operation_id, account_id, amount) values (oid, pay, k), (oid, av.id, -k);
+  end if;
+  if u > 0 or k > 0 then perform _log('operations'); end if;
+  return jsonb_build_object('ok', true, 'receipt_id', rid, 'total', tot,
+    'avoir', case when cl.id is not null then _client_avoir(cl.id) end);
 end $$;
 
 create or replace function get_receipt(p jsonb) returns jsonb
@@ -1555,7 +1649,8 @@ begin
     'client_phone', (select phone from clients where id = r.client_id),
     'pay_account', (select name from accounts where id = r.pay_account_id),
     'pay_kind', (select kind from accounts where id = r.pay_account_id),
-    'lines', (select coalesce(jsonb_agg(_op_row(o) order by o.id), '[]') from operations o where o.receipt_id = r.id),
+    'lines', (select coalesce(jsonb_agg(_op_row(o) order by o.id), '[]') from operations o where o.receipt_id = r.id and o.kind <> 'avoir'),
+    'client_avoir', case when r.client_id is not null then _client_avoir(r.client_id) end,
     'company', (select value from settings where key = 'company'));
 end $$;
 
@@ -1618,6 +1713,10 @@ begin
     from (values ('Envoi RIA', 'entree', 'RIA', 60), ('Retrait RIA', 'sortie', 'RIA', 61),
                  ('Envoi Western Union', 'entree', 'Western Union', 62), ('Retrait Western Union', 'sortie', 'Western Union', 63)) v(n, d, acc, s)
     where not exists (select 1 from products where name = v.n);
+  -- Compte commun « Monnaie des clients » (monnaie gardée pour les clients).
+  insert into accounts(name, kind, allow_negative, sort, note)
+    select 'Monnaie des clients', 'avoir', true, 190, 'Monnaie gardée pour les clients (ce que nous leur devons)'
+    where not exists (select 1 from accounts where kind = 'avoir');
   if not exists (select 1 from settings where key = 'company') then
     insert into settings(key, value) values ('company', jsonb_build_object(
       'name', 'AYAEL ENTREPRISE', 'address', '', 'phone', '', 'title', 'REÇU',
@@ -1662,7 +1761,8 @@ begin
                '_client_for','search_clients','save_client','op_vente','get_receipt','save_settings',
                '_norm_name','import_clients','find_duplicates','merge_clients','verify_commission',
                '_main','_scope','_acc_in','_liaison','_coffre_of','_set_agence','save_agence','liaison_detail',
-               '_can','_require_perm','_mine','save_fournisseur','list_fournisseurs','op_paiement_fournisseur')
+               '_can','_require_perm','_mine','save_fournisseur','list_fournisseurs','op_paiement_fournisseur',
+               '_client_avoir','op_avoir')
     loop
       execute format('revoke execute on function %s from public, anon', f.sig);
       if left(f.proname, 1) = '_' or f.proname = 'handle_new_user' then

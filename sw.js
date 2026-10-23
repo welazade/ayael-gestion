@@ -1,6 +1,6 @@
-﻿// Service worker : permet l'installation sur le téléphone et un démarrage rapide.
+// Service worker : permet l'installation sur le téléphone et un démarrage rapide.
 // Les données passent toujours par Internet (rien n'est enregistré hors ligne).
-const VERSION = 'ayael-v9';
+const VERSION = 'ayael-v11';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/logo.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png'];
 
@@ -16,7 +16,7 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.hostname.endsWith('supabase.co')) return; // données : jamais de cache
-  const isCdn = url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'cdnjs.cloudflare.com';
+  const isCdn = ['cdn.jsdelivr.net', 'cdnjs.cloudflare.com', 'fonts.googleapis.com', 'fonts.gstatic.com'].includes(url.hostname);
   if (isCdn) {
     // Bibliothèques versionnées : cache d'abord.
     e.respondWith(caches.match(req).then(r => r || fetch(req).then(res => {

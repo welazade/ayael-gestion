@@ -283,6 +283,19 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .panel { background: #F6F6F8; border-radius: 12px; padding: 12px; margin-bottom: 14px; }
 .hint { font-size: 12px; color: var(--muted); align-self: center; }
 
+/* ---------- Clients : fidélité et compte ---------- */
+.clrow { display: flex; align-items: center; gap: 8px; }
+.rowbtn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; background: none; border: 0; padding: 0; margin: 0;
+  text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.rowbtn .main { flex: 1; min-width: 0; }
+.clrow > .btn { flex: none; }
+.tag.lvl { font-weight: 650; }
+.tag.lvl.gold { background: #FBF1D3; color: #8A6400; }
+.tag.lvl.silver { background: #ECEEF2; color: #4A5160; }
+.tag.lvl.bronze { background: #F6E7DC; color: #8B4A1F; }
+.avbox { background: #F6F6F8; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; }
+.avbox .field { margin: 8px 0 0; }
+
 /* ---------- Reçu ---------- */
 .ticket { background: #fff; color: #000; width: 300px; max-width: 100%; margin: 0 auto; padding: 14px 12px; border: 1px dashed #CFCFD6;
   font: 13px/1.35 ui-monospace, Consolas, "Courier New", monospace; }
@@ -297,43 +310,42 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .ticket .title { font-weight: 700; letter-spacing: .1em; }
 #print-root { display: none; }
 
-/* ---------- Bordereau (format DL 99 × 210 mm, comme les bordereaux papier) ---------- */
+/* ---------- Bordereau (format DL 99 × 210 mm) : sobre, en gris, seul le logo en couleur ---------- */
 .bd-wrap { overflow-x: auto; }
-.bd { --red: #E32B2B; background: #fff; color: #111; width: 99mm; min-height: 210mm; margin: 0 auto; padding: 6mm 6mm 5mm; box-sizing: border-box;
-  font: 9pt/1.3 "Segoe UI", Roboto, Arial, sans-serif; border: 1px solid #DDD; box-shadow: 0 2px 10px rgba(0,0,0,.06);
-  -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.bd-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 3mm; }
-.bd-top img { height: 15mm; width: auto; }
-.bd-no { text-align: right; font-size: 8pt; line-height: 1.35; white-space: nowrap; }
-.bd-no b { font-size: 10pt; color: var(--red); }
-.bd-info { font-size: 6.4pt; line-height: 1.35; color: #333; margin-top: 2mm; padding-bottom: 2mm; border-bottom: .3mm solid #999; }
-.bd-title { font: 900 17pt/1.05 "Arial Black", "Segoe UI", Arial, sans-serif; letter-spacing: -.02em; margin-top: 3mm; text-transform: uppercase; }
-.bd-sub { color: var(--red); font-weight: 800; font-size: 11pt; margin-bottom: 2.5mm; }
-.bd-sec { background: #F3F3F4; border-radius: 3mm; padding: 2.2mm 3mm 2.6mm; margin-bottom: 2.2mm; position: relative; break-inside: avoid; }
-.bd-sec.x { opacity: .55; }
-.bd-cancel { position: absolute; inset: 0; display: grid; place-items: center; color: var(--red); font-weight: 900; font-size: 18pt; transform: rotate(-12deg); letter-spacing: .1em; }
-.bd-h { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; font-weight: 800; text-transform: uppercase; font-size: 9pt; margin-bottom: 1.2mm; }
-.bd-h2 { margin-top: 2.5mm; }
-.bd-amt { font-size: 9.5pt; white-space: nowrap; text-transform: none; }
-.bd-lab { font-size: 7pt; font-style: italic; color: #444; margin-top: 1.4mm; }
-.bd-line { min-height: 4.6mm; border-bottom: .25mm dotted #666; font-weight: 600; padding: .4mm 0; word-break: break-word; }
-.bd-boxes { display: grid; border: .3mm solid #222; border-radius: 1.6mm; overflow: hidden; background: #fff; margin-top: .6mm; }
-.bd-boxes span { height: 6.5mm; display: grid; place-items: center; font: 700 10pt ui-monospace, Consolas, monospace; border-left: .25mm solid #999; }
-.bd-boxes span:first-child { border-left: 0; }
-.bd-opts { display: flex; flex-wrap: wrap; gap: 1.2mm 3.5mm; margin: .8mm 0; }
-.bd-o { display: inline-flex; align-items: center; gap: 1.2mm; font-weight: 700; font-size: 8pt; text-transform: uppercase; }
-.bd-ck { width: 3.2mm; height: 3.2mm; border: .3mm solid #222; border-radius: .6mm; display: inline-grid; place-items: center; background: #fff; flex: none; }
-.bd-ck.on { background: var(--red); border-color: var(--red); }
-.bd-ck.on::after { content: "✓"; color: #fff; font-size: 7pt; font-weight: 900; line-height: 1; }
-.bd-tot { display: flex; justify-content: space-between; align-items: center; background: #FDECEC; border-radius: 3mm; padding: 2.4mm 3mm; }
-.bd-tot span { color: var(--red); font-weight: 800; font-size: 8.5pt; }
-.bd-tot b { font-size: 13pt; white-space: nowrap; }
-.bd-words { font-style: italic; }
-.bd-pay { display: flex; flex-wrap: wrap; gap: 1mm 4mm; font-size: 8pt; margin-top: 1.6mm; }
-.bd-sign { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
-.bd-sign > div { background: #F3F3F4; border-radius: 3mm; height: 20mm; padding: 1.6mm 2mm; display: flex; flex-direction: column; justify-content: space-between; font-size: 7pt; text-align: center; }
-.bd-sign small { font-size: 7pt; color: #555; }
-.bd-foot { text-align: center; color: var(--red); font-size: 7.5pt; font-weight: 600; margin-top: 2.5mm; }
+.bd { background: #fff; color: #1d1d1f; width: 99mm; min-height: 210mm; margin: 0 auto; padding: 8mm 7.5mm 6mm; box-sizing: border-box;
+  display: flex; flex-direction: column; font: 300 8.6pt/1.45 Inter, "Segoe UI", Roboto, Arial, sans-serif; letter-spacing: .005em;
+  border: 1px solid #E4E4E7; box-shadow: 0 2px 12px rgba(0,0,0,.05); font-variant-numeric: tabular-nums; }
+.bd b { font-weight: 500; }
+.bd-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.bd-top img { height: 12mm; width: auto; margin-left: -1mm; }
+.bd-no { text-align: right; font-size: 7.4pt; color: #6e6e73; line-height: 1.6; }
+.bd-no span { display: block; color: #1d1d1f; font-weight: 400; font-size: 8.4pt; letter-spacing: .06em; }
+.bd-slogan { font-size: 7pt; color: #8e8e93; letter-spacing: .04em; margin-top: 1.5mm; }
+.bd-title { font-weight: 300; font-size: 17pt; letter-spacing: -.01em; margin-top: 7mm; line-height: 1.15; }
+.bd-sub { font-size: 7pt; text-transform: uppercase; letter-spacing: .18em; color: #8e8e93; margin-top: 1.2mm; }
+.bd-block { margin-top: 5.5mm; }
+.bd-cap { font-size: 6.6pt; text-transform: uppercase; letter-spacing: .16em; color: #8e8e93; padding-bottom: 1.4mm; border-bottom: .2mm solid #D1D1D6; margin-bottom: 1.6mm; }
+.bd-cap2 { display: flex; justify-content: space-between; }
+.bd-client { font-size: 10pt; font-weight: 400; }
+.bd-muted { color: #6e6e73; }
+.bd-item { padding: 1.8mm 0 2mm; border-bottom: .2mm solid #EBEBEF; break-inside: avoid; }
+.bd-item.x { color: #9a9aa0; text-decoration: line-through; }
+.bd-item em { font-style: normal; text-decoration: none; }
+.bd-row { display: flex; justify-content: space-between; gap: 3mm; }
+.bd-name { font-weight: 400; font-size: 9pt; }
+.bd-val { font-weight: 400; font-size: 9pt; white-space: nowrap; }
+.bd-kv { display: flex; justify-content: space-between; gap: 3mm; font-size: 7.6pt; color: #6e6e73; margin-top: .5mm; }
+.bd-kv b { font-weight: 400; color: #1d1d1f; letter-spacing: .03em; text-align: right; overflow-wrap: anywhere; }
+.bd-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 4mm; padding-top: 2.4mm; border-top: .35mm solid #1d1d1f; }
+.bd-total span { font-size: 7pt; text-transform: uppercase; letter-spacing: .16em; color: #6e6e73; }
+.bd-total b { font-size: 14pt; font-weight: 400; letter-spacing: -.01em; }
+.bd-words { font-size: 7.6pt; color: #6e6e73; font-style: italic; text-align: right; margin-top: .6mm; }
+.bd-pay { margin-top: 3.5mm; }
+.bd-sign { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; margin-top: auto; padding-top: 10mm; }
+.bd-sign > div { font-size: 6.8pt; color: #8e8e93; text-align: center; }
+.bd-sign span { display: block; height: 14mm; border-bottom: .2mm solid #AEAEB2; margin-bottom: 1.4mm; }
+.bd-foot { margin-top: 5mm; text-align: center; font-size: 6.2pt; color: #8e8e93; line-height: 1.5; }
+.bd-thanks { font-size: 7.6pt; color: #3a3a3c; margin-bottom: 1.2mm; }
 
 @media print {
   body { background: #fff; }
