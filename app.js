@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '16';
+  const DEMO_SCHEMA_VERSION = '18';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -1918,9 +1918,9 @@
       </div>
       ${(d.liaisons || []).length ? section('Entre agences', liaisonList(d.liaisons)) : ''}
       ${(() => { const shown = parts.filter(p => Math.abs(Number(p.position)) >= 1 || Math.abs(Number(p.cards_position || 0)) >= 1 || p.pending_n);
-        return shown.length ? section('Partenaires', `<div class="list">${shown.map(p => { const x = posText(p.position);
+        return shown.length ? section('Partenaires et fournisseurs', `<div class="list">${shown.map(p => { const x = posText(p.position, p.kind);
           return `<a class="row" href="#/fournisseurs"><div class="ico rc">${esc(initials(p.name))}</div>
-            <div class="main"><div class="t">${esc(p.name)} · ${esc(x.t.replace('Le partenaire', 'il').replace('au partenaire', 'lui'))}${x.amt ? ' ' + fmt(x.amt) : ''}</div>
+            <div class="main"><div class="t">${esc(p.name)} · ${esc(x.t.replace(/^Le (partenaire|fournisseur)/, 'il').replace(/au (partenaire|fournisseur)$/, 'lui'))}${x.amt ? ' ' + fmt(x.amt) : ''}</div>
               <div class="s">${[p.cards_position != null && Number(p.cards_position) ? 'cartes : ' + esc(lcFirst(posLine(p.cards_position))) : '', p.pending_n ? p.pending_n + ' opération(s) en attente' : ''].filter(Boolean).join(' · ') || 'à jour'}</div></div>
             <div class="end"><div class="amt num ${x.cls}">${x.amt ? fmt(x.amt) : '—'}</div></div></a>`; }).join('')}</div>`) : ''; })()}
       ${crv && (crv.total_du || crv.total_avances) ? section('Clients', `<div class="list">
@@ -2078,12 +2078,16 @@
   // ---------------------------------------------------------------- partenaires et fournisseurs
   // Position : solde positif = le partenaire nous doit ; négatif = nous lui devons. Calculée par la base.
   const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
-  function posText(b) {
+  function posText(b, kind) {
     b = Number(b) || 0;
+    const who = kind === 'fournisseur' ? 'fournisseur' : 'partenaire';
     if (Math.abs(b) < 1) return { t: 'Compte équilibré', amt: 0, cls: '' };
-    return b > 0 ? { t: 'Le partenaire nous doit', amt: b, cls: 'pos' } : { t: 'Nous devons au partenaire', amt: -b, cls: 'neg' };
+    return b > 0 ? { t: `Le ${who} nous doit`, amt: b, cls: 'pos' } : { t: `Nous devons au ${who}`, amt: -b, cls: 'neg' };
   }
-  const posLine = b => { const x = posText(b); return `${x.t}${x.amt ? ' : ' + fmt(x.amt) : ''}`; };
+  const posLine = (b, kind) => { const x = posText(b, kind); return `${x.t}${x.amt ? ' : ' + fmt(x.amt) : ''}`; };
+  const P_KIND = { fournisseur: 'Fournisseur', partenaire: 'Partenaire', les_deux: 'Partenaire et fournisseur' };
+  // Opérations possibles selon le type de fiche.
+  const typesFor = kind => D_TYPES.filter(t => kind === 'les_deux' || (kind === 'fournisseur' ? ['cartes', 'virement', 'ouverture'].includes(t[0]) : t[0] !== 'cartes'));
   const lcFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
   const posMsg = r => r.dossier && ['cartes'].includes(r.dossier.type) && r.cards_position != null ? `Achats de cartes : ${lcFirst(posLine(r.cards_position))}.` : `Position : ${lcFirst(posLine(r.position))}.`;
   const D_STATUS = { en_attente: ['En attente', 'amber'], en_cours: ['En cours', 'amber'], partiel: ['Partiel', 'amber'], termine: ['Terminé', 'green'],
@@ -2095,7 +2099,7 @@
     ['transfert_in', 'Transfert reçu par le partenaire', 'in', 'Wave, Orange Money, MTN : le partenaire reçoit, nous payons'],
     ['transfert_out', 'Transfert reçu par AYAEL', 'swap', 'Nous recevons les fonds, le partenaire paie de son côté'],
     ['appro', 'Approvisionnement UBA / GTCO', 'truck', 'Demande d’alimentation de nos comptes de recharge'],
-    ['virement', 'Virement au partenaire', 'bank', 'Argent envoyé au partenaire (avance ou règlement)'],
+    ['virement', 'Paiement / virement', 'bank', 'Argent envoyé (avance ou règlement de ce que nous devons)'],
     ['cartes', 'Commande de cartes', 'tag', 'Achat de cartes physiques'],
     ['ouverture', 'Solde d’ouverture', 'adjust', 'Position de départ avec ce partenaire, justifiée'],
   ];
@@ -2129,49 +2133,54 @@
     const pend = list.reduce((s, p) => s + Number(p.pending_n || 0), 0);
     m.innerHTML = `
       <div class="kpis">
-        <div class="kpi"><div class="label">Nos partenaires nous doivent</div><div class="value num pos">${fmt(owe)}</div></div>
-        <div class="kpi"><div class="label">Nous devons à nos partenaires</div><div class="value num ${due ? 'neg' : ''}">${fmt(due)}</div></div>
+        <div class="kpi"><div class="label">Partenaires et fournisseurs nous doivent</div><div class="value num pos">${fmt(owe)}</div></div>
+        <div class="kpi"><div class="label">Nous leur devons</div><div class="value num ${due ? 'neg' : ''}">${fmt(due)}</div></div>
         <div class="kpi"><div class="label">Opérations en attente</div><div class="value num">${pend}</div><div class="sub"><a href="#/dossiers">voir la liste</a></div></div>
         <div class="kpi"><div class="label">Cartes en stock</div><div class="value num">${stock.reduce((s, x) => s + Number(x.stock), 0)}</div><div class="sub"><a href="#/stock">stock de cartes</a></div></div>
       </div>
-      <div class="list">${list.length ? list.map(p => {
-          const x = posText(p.position);
+      ${[['Partenaires', list.filter(p => p.kind !== 'fournisseur'), 'partenaire', 'Opérations financières : approvisionnements UBA / GTCO, recharges Ecobank / BNI, paiements, transferts.'],
+         ['Fournisseurs', list.filter(p => p.kind !== 'partenaire'), 'fournisseur', 'Achats : cartes, solde électronique, crédit, fournitures.']].map(([title, l, k, help]) => section(title,
+        `<p class="small muted" style="margin:0 4px 8px">${help}</p><div class="list">${l.length ? l.map(p => {
+          const sup = k === 'fournisseur' && p.kind === 'les_deux' && p.cards_position != null;
+          const x = posText(sup ? p.cards_position : p.position, k);
           return `<button class="row" data-part="${p.id}"><div class="ico rc">${esc(initials(p.name))}</div>
-            <div class="main"><div class="t">${esc(p.name)} ${p.active ? '' : '<span class="tag">inactif</span>'} ${p.pending_n ? `<span class="tag amber">${p.pending_n} en attente</span>` : ''}</div>
-              <div class="s">${esc([p.country, x.t + (x.amt ? ' ' + fmt(x.amt) : ''), p.cards_position != null && Number(p.cards_position) ? 'cartes : ' + lcFirst(posLine(p.cards_position)) : ''].filter(Boolean).join(' · '))}</div></div>
+            <div class="main"><div class="t">${esc(p.name)} ${p.kind === 'les_deux' ? `<span class="tag brand">${k === 'partenaire' ? 'aussi fournisseur' : 'aussi partenaire'}</span>` : ''} ${p.active ? '' : '<span class="tag">inactif</span>'} ${p.pending_n ? `<span class="tag amber">${p.pending_n} en attente</span>` : ''}</div>
+              <div class="s">${esc([p.country, x.t + (x.amt ? ' ' + fmt(x.amt) : ''), sup ? 'achats de cartes · opérations financières : ' + lcFirst(posLine(p.position)) : p.cards_position != null && Number(p.cards_position) ? 'cartes : ' + lcFirst(posLine(p.cards_position, 'fournisseur')) : ''].filter(Boolean).join(' · '))}</div></div>
             <div class="end"><div class="amt num ${x.cls}">${x.amt ? (x.cls === 'pos' ? '+' : '−') + fmt(x.amt) : 'à jour'}</div></div></button>`;
-        }).join('') : '<div class="empty">Aucun partenaire pour le moment.</div>'}</div>
-      ${can('fournisseurs') ? `<button class="btn block" id="newp" style="margin-top:12px">${icon('plus')} Nouveau partenaire ou fournisseur</button>` : ''}`;
+        }).join('') : `<div class="empty">Aucun ${k} pour le moment.</div>`}</div>
+        ${can('fournisseurs') ? `<button class="btn block" data-newp="${k}" style="margin-top:8px">${icon('plus')} Nouveau ${k}</button>` : ''}`)).join('')}`;
     m.querySelectorAll('[data-part]').forEach(b => b.onclick = () => sheetPartenaire(Number(b.dataset.part)));
-    const nb = m.querySelector('#newp'); if (nb) nb.onclick = () => sheetPartenaireEdit(null);
+    m.querySelectorAll('[data-newp]').forEach(b => b.onclick = () => sheetPartenaireEdit(null, null, b.dataset.newp));
   }
 
   // Fiche d'un partenaire : position, en attente, cartes, historique, actions.
   async function sheetPartenaire(id) {
     const p = await rpc('get_partenaire', { id });
-    const x = posText(p.position);
-    const types = D_TYPES.filter(t => p.can_manage || AGENT_TYPES.includes(t[0]));
-    const scope = p.cartes_compensees ? 'Comprend toutes les opérations confirmées, y compris les achats de cartes.'
+    const x = posText(p.position, p.kind);
+    const types = typesFor(p.kind).filter(t => p.can_manage || AGENT_TYPES.includes(t[0]));
+    const scope = p.kind === 'fournisseur' ? 'Achats confirmés (réceptions, achats à crédit) moins nos paiements.' : p.cartes_compensees ? 'Comprend toutes les opérations confirmées, y compris les achats de cartes.'
       : 'Opérations financières confirmées (approvisionnements, recharges, paiements, transferts, virements). Les achats de cartes sont suivis à part.';
     const kv = [['Pays', p.country], ['Interlocuteurs', p.contacts], ['Produits et services', p.products], ['Coordonnées bancaires', p.bank_details],
       ['Mobile money', p.momo], ['Conditions (prix, frais, commissions)', p.conditions], ['Conditions de paiement', p.payment_terms], ['Note', p.note]].filter(r => r[1]);
     const c = sheet({
-      title: p.name, wide: true,
+      title: `${p.name} · ${P_KIND[p.kind] || ''}`, wide: true,
       body: `<div class="cols"><div>
           <div class="hero" style="margin-bottom:10px"><div class="label">${esc(x.t)}</div><div class="big num">${fmt(x.amt)}</div>
             <div class="sub">${esc(scope)}</div></div>
-          ${p.cards_position != null ? `<div class="alert ${Number(p.cards_position) < 0 ? 'warn' : 'info'}"><span><b>Achats de cartes :</b> ${esc(posLine(p.cards_position))}</span></div>` : ''}
-          <div class="section"><h2><span>Nouvelle opération</span></h2><div class="actions two">${types.map(t => `<button class="action" data-new="${t[0]}">${icon(t[2])}${esc(t[1])}</button>`).join('')}</div></div>
+          ${p.cards_position != null ? `<div class="alert ${Number(p.cards_position) < 0 ? 'warn' : 'info'}"><span><b>Achats de cartes :</b> ${esc(posLine(p.cards_position, 'fournisseur'))}</span></div>` : ''}
+          <div class="section"><h2><span>Nouvelle opération</span></h2><div class="actions two">${p.kind !== 'partenaire' && can('appro') ? `<button class="action" data-buy="1">${icon('truck')}Acheter (solde électronique, crédit…)</button>` : ''}${types.map(t => `<button class="action" data-new="${t[0]}">${icon(t[2])}${esc(t[1])}</button>`).join('')}</div></div>
           ${kv.length ? section('Fiche', `<dl class="kv">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd style="white-space:pre-line">${esc(v)}</dd>`).join('')}</dl>`) : ''}
         </div><div>
           ${section('En attente', p.pending.length ? `<div class="list">${p.pending.map(dossierRow).join('')}</div>` : '<div class="list"><div class="empty">Aucune opération en attente.</div></div>')}
           ${p.cartes.length ? section('Commandes de cartes', `<div class="list">${p.cartes.map(dossierRow).join('')}</div>`) : ''}
+          ${p.direct && p.direct.length ? section('Achats et paiements directs', opList(p.direct, true)) : ''}
           ${section('Historique', p.recent.length ? `<div class="list">${p.recent.map(dossierRow).join('')}</div>` : '<div class="list"><div class="empty">Aucune opération.</div></div>')}
         </div></div>`,
       foot: `${p.can_manage ? `<button class="btn" data-x="edit">Modifier la fiche</button><button class="btn" data-x="releve">${icon('list')} Relevé</button>` : ''}`,
       onMount(c) {
         const reopen = () => { c.close(); sheetPartenaire(id); };
         c.qa('[data-new]').forEach(b => b.onclick = () => { c.close(); sheetNewDossier(b.dataset.new, p, () => sheetPartenaire(id)); });
+        const by = c.q('[data-buy]'); if (by) by.onclick = () => { c.close(); sheetAppro({ fournisseurId: p.account_id }); };
         bindDossiers(c.el, () => sheetPartenaire(id));
         c.qa('[data-dossier]').forEach(b => b.addEventListener('click', () => c.close()));
         const e = c.q('[data-x=edit]'); if (e) e.onclick = () => { c.close(); sheetPartenaireEdit(p, reopen); };
@@ -2181,12 +2190,13 @@
     return c;
   }
 
-  function sheetPartenaireEdit(p, then) {
-    const x = p || { cartes_compensees: true, active: true };
+  function sheetPartenaireEdit(p, then, kind) {
+    const x = p || { cartes_compensees: true, active: true, kind: kind || 'fournisseur' };
     const ta = (n, ph) => `<textarea class="input" name="${n}" rows="2" placeholder="${esc(ph || '')}">${esc(x[n] || '')}</textarea>`;
     sheet({
-      title: p ? 'Modifier la fiche' : 'Nouveau partenaire ou fournisseur', wide: true,
-      body: `<div class="grid2">${field('Nom', `<input class="input autofocus" name="name" value="${esc(x.name || '')}">`)}
+      title: p ? 'Modifier la fiche' : (x.kind === 'partenaire' ? 'Nouveau partenaire' : 'Nouveau fournisseur'), wide: true,
+      body: `<div class="field"><span>Type</span><div class="chips wrap">${[['fournisseur', 'Fournisseur (achats)'], ['partenaire', 'Partenaire (opérations financières)'], ['les_deux', 'Les deux']].map(([k, l]) => `<button type="button" class="chip ${x.kind === k ? 'on' : ''}" data-chip="pk" data-v="${k}">${l}</button>`).join('')}</div></div>
+        <div class="grid2">${field('Nom', `<input class="input autofocus" name="name" value="${esc(x.name || '')}">`)}
           ${field('Pays', `<input class="input" name="country" value="${esc(x.country || '')}" placeholder="Togo, Côte d’Ivoire…">`)}</div>
         ${field('Interlocuteurs et coordonnées', ta('contacts', 'Nom, téléphone, e-mail…'))}
         ${field('Produits et services fournis', ta('products', 'Cartes, alimentation UBA / GTCO, recharges Ecobank…'))}
@@ -2198,10 +2208,12 @@
         ${p ? `<label class="check"><input type="checkbox" name="active" ${x.active ? 'checked' : ''}> Partenaire actif</label>` : ''}`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
+        chipGroup(c, 'pk');
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
           const v = { id: p ? p.id : null };
           ['name', 'country', 'contacts', 'products', 'bank_details', 'momo', 'conditions', 'payment_terms', 'note'].forEach(k => { v[k] = c.q(`[name=${k}]`).value; });
           v.cartes_compensees = c.q('[name=cartes_compensees]').checked;
+          v.kind = chipVal(c, 'pk');
           if (c.q('[name=active]')) v.active = c.q('[name=active]').checked;
           const r = await rpc('save_partenaire', v);
           c.close(); toast('Fiche enregistrée.', 'ok'); await loadBoot(); refreshNow();
@@ -2236,7 +2248,7 @@
   // Nouvelle opération avec un partenaire (formulaire selon le type).
   async function sheetNewDossier(type, p, then) {
     if (!p) {
-      const list = (S.partenaires && S.partenaires.length ? S.partenaires : await rpc('list_partenaires')).filter(x => x.active);
+      const list = (S.partenaires && S.partenaires.length ? S.partenaires : await rpc('list_partenaires')).filter(x => x.active && typesFor(x.kind).some(t => t[0] === type));
       if (!list.length) return toast('Aucun partenaire. Demandez à la direction de le créer.', 'bad');
       if (list.length > 1) {
         return sheet({

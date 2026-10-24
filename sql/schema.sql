@@ -361,9 +361,14 @@ create table if not exists credit_allocs (
 alter table client_credits enable row level security;
 alter table credit_allocs enable row level security;
 
--- Les fournisseurs existants deviennent des partenaires (une seule fois).
-insert into partenaires(account_id, name, contacts, note)
-  select a.id, a.name, a.phone, a.note from accounts a
+-- Type de fiche : un fournisseur (achats) n'est pas forcément un partenaire (opérations financières).
+alter table partenaires add column if not exists kind text not null default 'fournisseur';
+alter table partenaires drop constraint if exists partenaires_kind_check;
+alter table partenaires add constraint partenaires_kind_check check (kind in ('fournisseur','partenaire','les_deux'));
+
+-- Les fournisseurs existants ont une fiche (type « fournisseur ») (une seule fois).
+insert into partenaires(account_id, name, contacts, note, kind)
+  select a.id, a.name, a.phone, a.note, 'fournisseur' from accounts a
   where a.kind = 'fournisseur' and not a.is_cards and not exists (select 1 from partenaires x where x.account_id = a.id);
 
 -- Mise en place des agences sur des données existantes (une seule fois).
@@ -1931,6 +1936,7 @@ begin
   update partenaires set name = nm, country = _txt(p,'country'), contacts = _txt(p,'contacts'), products = _txt(p,'products'),
     bank_details = _txt(p,'bank_details'), momo = _txt(p,'momo'), conditions = _txt(p,'conditions'),
     payment_terms = _txt(p,'payment_terms'), note = _txt(p,'note'),
+    kind = case when _txt(p,'kind') in ('fournisseur','partenaire','les_deux') then _txt(p,'kind') else kind end,
     cartes_compensees = coalesce((p->>'cartes_compensees')::boolean, cartes_compensees),
     active = coalesce((p->>'active')::boolean, active)
   where id = r.id returning * into r;
@@ -1954,7 +1960,7 @@ begin
   me := _require(null);
   return (
     select coalesce(jsonb_agg(jsonb_build_object(
-      'id', x.id, 'name', x.name, 'country', x.country, 'products', x.products, 'active', x.active,
+      'id', x.id, 'name', x.name, 'kind', x.kind, 'country', x.country, 'products', x.products, 'active', x.active,
       'account_id', x.account_id, 'cards_account_id', x.cards_account_id, 'cartes_compensees', x.cartes_compensees,
       'position', _bal(x.account_id),
       'cards_position', case when x.cards_account_id is not null then _bal(x.cards_account_id) end,
@@ -1986,7 +1992,14 @@ begin
     'recent', (select coalesce(jsonb_agg(_pop_row(d, canp) order by d.created_at desc), '[]') from (
                 select * from partner_ops d where d.partenaire_id = pa.id
                   and (canp or d.type in ('recharge','paiement','transfert_in','transfert_out'))
-                order by d.created_at desc limit 60) d)
+                order by d.created_at desc limit 60) d),
+    -- Achats et paiements faits hors dossier (ex. « Approvisionner un compte » acheté chez ce fournisseur).
+    'direct', case when canp then (select coalesce(jsonb_agg(_op_row(o) order by o.created_at desc), '[]') from (
+                select o.* from operations o
+                where o.partner_op_id is null and o.status = 'ok'
+                  and (o.fournisseur_id in (pa.account_id, pa.cards_account_id) or o.account_id in (pa.account_id, pa.cards_account_id)
+                       or o.account2_id in (pa.account_id, pa.cards_account_id))
+                order by o.created_at desc limit 40) o) else '[]'::jsonb end
   );
 end $$;
 
@@ -2034,6 +2047,9 @@ begin
   me := _require(null);
   pa := _part(_num(p,'partenaire_id')::bigint);
   if not pa.active then raise exception 'Ce partenaire est désactivé.'; end if;
+  if t in ('appro','recharge','paiement','transfert_in','transfert_out') and pa.kind = 'fournisseur' then
+    raise exception '% est un fournisseur, pas un partenaire : cette opération n''est pas possible avec lui (modifiez sa fiche si c''est aussi un partenaire).', pa.name;
+  end if;
   if t in ('appro','cartes','virement','ouverture') then
     me := _require_perm('fournisseurs');
   elsif t in ('recharge','paiement','transfert_in','transfert_out') then

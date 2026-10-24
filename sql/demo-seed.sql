@@ -75,12 +75,12 @@ insert into auth.users(id, email, raw_user_meta_data) values
   ('00000000-0000-0000-0000-000000000006', 'sousgerante@ayael.app', '{"full_name":"Sous-gérante (démo)"}')
 on conflict do nothing;
 select save_profile('{"id":"00000000-0000-0000-0000-000000000006","role":"sous_gerant","active":true,"perm_appro":true,"perm_fournisseurs":true}');
-select save_partenaire('{"name":"Moov Distribution","country":"Togo","contacts":"90 00 00 00","products":"Solde électronique Moov Money, crédit Moov"}');
+select save_partenaire('{"name":"Moov Distribution","kind":"fournisseur","country":"Togo","contacts":"90 00 00 00","products":"Solde électronique Moov Money, crédit Moov"}');
 select op_approvisionnement(jsonb_build_object('gtp_id', (select id from accounts where name = 'Mixx agent 1'), 'amount', 100000,
   'source_id', (select id from accounts where name = 'Moov Distribution'), 'details', 'Solde électronique Mixx (démo)'));
 
 -- Partenaire en Côte d'Ivoire : l'exemple du cahier des charges (il doit 400 000 F à AYAEL).
-select save_partenaire('{"name":"Partenaire CI (démo)","country":"Côte d''Ivoire","contacts":"M. Koné · +225 07 00 00 00",
+select save_partenaire('{"name":"Partenaire CI (démo)","kind":"les_deux","country":"Côte d''Ivoire","contacts":"M. Koné · +225 07 00 00 00",
   "products":"Cartes physiques, alimentation UBA / GTCO, recharges Ecobank et BNI, paiements de bénéficiaires, Wave / Orange Money / MTN",
   "conditions":"Frais Ecobank / BNI : 1 % du montant","payment_terms":"Compensation chaque fin de semaine","cartes_compensees":false}');
 select op_ajustement(jsonb_build_object('account_id', (select id from accounts where name = 'Coffre'), 'target', 3000000, 'details', 'Coffre (démo)'));
