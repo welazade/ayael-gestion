@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '18';
+  const DEMO_SCHEMA_VERSION = '19';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -59,8 +59,9 @@
   }
   const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => f(...a), ms); }; };
   const isDir = () => S.me && S.me.role === 'gerante';                 // direction (gérante de l'agence principale)
-  const isMgr = () => S.me && S.me.role !== 'agent';                   // direction ou gérant d'agence
-  const roleLabel = r => ({ gerante: 'Direction', gerant: 'Gérant(e) d’agence', sous_gerant: 'Sous-gérant(e)', agent: 'Agent' }[r] || r);
+  const isMgr = () => S.me && ['gerante', 'gerant', 'sous_gerant'].includes(S.me.role);   // direction, gérant ou sous-gérant d'agence
+  const isPartner = () => S.me && S.me.role === 'partenaire';          // compte d'un partenaire : son espace seulement
+  const roleLabel = r => ({ gerante: 'Direction', gerant: 'Gérant(e) d’agence', sous_gerant: 'Sous-gérant(e)', agent: 'Agent', partenaire: 'Partenaire (espace partenaire)' }[r] || r);
   // Droits (comme dans la base) : direction et gérant d'agence ont tout ; un sous-gérant ce qui est coché.
   const PERMS = [['appro', 'Approvisionner les comptes (et faire des transferts)'], ['produits', 'Ajouter / modifier des produits'],
     ['ajust', 'Ajuster les soldes'], ['clotures', 'Valider les clôtures, voir les rapports'], ['fournisseurs', 'Partenaires et fournisseurs (demandes, confirmations, paiements, relevés)']];
@@ -214,7 +215,7 @@
     if (top) { if (top._onkey) top._onkey(e); return; }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     if (typing || e.ctrlKey || e.metaKey || e.altKey || !S.me || !S.me.active || !document.getElementById('main')) return;
-    if (e.key === 'n' || e.key === 'N' || e.key === 'F2') { e.preventDefault(); sheetVente(); }
+    if ((e.key === 'n' || e.key === 'N' || e.key === 'F2') && !isPartner()) { e.preventDefault(); sheetVente(); }
     else if (e.key === '/') { const s = document.querySelector('main .search input'); if (s) { e.preventDefault(); s.focus(); } }
   });
 
@@ -476,7 +477,7 @@
         <div class="alert warn">Mode démo : choisissez qui vous êtes pour essayer l’application.</div>
         <div class="list" style="margin-bottom:16px">${users.map(u => `<button class="row" data-uid="${u.id}">
           <div class="ico ${u.role === 'gerante' ? 'rc' : 'neu'}">${esc(initials(u.full_name))}</div>
-          <div class="main"><div class="t">${esc(u.full_name)}</div><div class="s">${u.role === 'gerante' ? 'Gérante' : 'Agent'}${u.active ? '' : ' · en attente d’activation'}</div></div>${icon('chev')}</button>`).join('')}</div>
+          <div class="main"><div class="t">${esc(u.full_name)}</div><div class="s">${esc(roleLabel(u.role))}${u.active ? '' : ' · en attente d’activation'}</div></div>${icon('chev')}</button>`).join('')}</div>
         <button class="btn block" id="newu">Créer un compte agent (démo)</button>
         <button class="btn ghost block" id="quit">Quitter le mode démo</button></div>`;
       $app.querySelectorAll('[data-uid]').forEach(b => b.onclick = async () => { await S.api.signInAs(b.dataset.uid); startSession(); });
@@ -536,12 +537,14 @@
   // ---------------------------------------------------------------- coquille
   // Barre du bas (téléphone) : le « + » central ouvre une nouvelle opération.
   function tabs() {
+    if (isPartner()) return [['portail', 'Demandes', 'home'], ['preleve', 'Relevé', 'list']];
     if (isMgr()) return [['tableau', 'Tableau', 'home'], ['journal', 'Journal', 'list'], ['+'],
       can('clotures') ? ['clotures', 'Clôtures', 'lock'] : ['clients', 'Clients', 'users'], ['plus', 'Plus', 'grid']];
     return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['+'], ['clients', 'Clients', 'users'], ['cloture', 'Clôture', 'lock']];
   }
   // Menu latéral (ordinateur)
   function navItems() {
+    if (isPartner()) return [['portail', 'Mes demandes', 'home'], ['preleve', 'Relevé et position', 'list']];
     if (isDir()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
       ['commissions', 'Commissions à vérifier', 'card'], ['fournisseurs', 'Partenaires', 'truck'], ['dossiers', 'Opérations partenaires', 'swap'],
       ['credits', 'Crédits clients', 'receipt'], ['stock', 'Stock de cartes', 'tag'], ['rapports', 'Rapports', 'chart'], 'Réglages',
@@ -556,13 +559,13 @@
       ...(S.me.can_recharge ? [['commissions', 'Commissions à vérifier', 'card']] : []),
       ...(S.me.can_caisse ? [['dossiers', 'Opérations partenaires', 'swap']] : []), ['credits', 'Crédits clients', 'receipt'], ['cloture', 'Clôture du soir', 'lock']];
   }
-  const firstView = () => isMgr() ? 'tableau' : 'accueil';
+  const firstView = () => isPartner() ? 'portail' : isMgr() ? 'tableau' : 'accueil';
 
   function renderShell() {
     $app.innerHTML = `
       <aside class="sidebar">
         <img class="logo" src="icons/logo.png" alt="Ayael Entreprise">
-        <button class="hero-cta" data-do="vente">${icon('plus')}Nouvelle opération <span class="kbd">N</span></button>
+        ${isPartner() ? '' : `<button class="hero-cta" data-do="vente">${icon('plus')}Nouvelle opération <span class="kbd">N</span></button>`}
         <nav id="sidenav" aria-label="Menu"></nav>
         <button class="who" data-do="me"><span class="avatar">${esc(initials(S.me.full_name))}</span>
           <span><span class="t" style="display:block">${esc(S.me.full_name)}</span><span class="s">${esc(roleLabel(S.me.role))}${S.me.agence ? ' · ' + esc(S.me.agence) : ''}</span></span></button>
@@ -572,7 +575,7 @@
           <img src="icons/logo.png" alt="Ayael Entreprise">
           <div class="title" id="vtitle"></div>
           ${agenceSwitch()}
-          <button class="btn primary small newop" data-do="vente">${icon('plus')} Nouvelle opération</button>
+          ${isPartner() ? '' : `<button class="btn primary small newop" data-do="vente">${icon('plus')} Nouvelle opération</button>`}
           <span class="live" id="live">…</span>
           <button class="avatar" data-do="me" aria-label="Mon compte">${esc(initials(S.me.full_name))}</button>
         </header>
@@ -626,7 +629,7 @@
   async function route() {
     if (!S.me || !S.me.active || !document.getElementById('main')) return;
     let key = (location.hash.match(/^#\/([a-z]+)/) || [])[1];
-    const allowed = k => VIEWS[k] && (!VIEWS[k].mgr || isMgr()) && (!VIEWS[k].dir || isDir()) && (!VIEWS[k].perm || can(VIEWS[k].perm))
+    const allowed = k => VIEWS[k] && (isPartner() ? !!VIEWS[k].partner : !VIEWS[k].partner) && (!VIEWS[k].mgr || isMgr()) && (!VIEWS[k].dir || isDir()) && (!VIEWS[k].perm || can(VIEWS[k].perm))
       && (!VIEWS[k].need || isMgr() || S.me[VIEWS[k].need]);
     if (!key || !allowed(key)) {
       key = firstView();
@@ -1898,6 +1901,8 @@
     B.filter(b => b.balance >= 0 && Number(b.low_alert) > 0 && b.balance < b.low_alert).forEach(b => alerts.push(`<div class="alert warn"><span><b>${esc(b.name)}</b> est bas : ${fmt(b.balance)} (seuil ${fmt(b.low_alert)}).</span></div>`));
     if (d.pending_closings && can('clotures')) alerts.push(`<div class="alert info"><span>${d.pending_closings} clôture(s) à valider. <a href="#/clotures">Voir</a></span></div>`);
     if (d.commissions_to_check) alerts.push(`<div class="alert warn"><span>${d.commissions_to_check} commission(s) de recharge à vérifier sur le rapport du GTP. <a href="#/commissions">Vérifier</a></span></div>`);
+    const tov = parts.reduce((s, p) => s + Number(p.to_validate || 0), 0);
+    if (tov) alerts.push(`<div class="alert warn"><span>${tov} réponse(s) de partenaires à valider. <a href="#/dossiers" data-avalider="1">Voir</a></span></div>`);
     const sum = l => l.reduce((s, b) => s + Number(b.balance), 0);
     m.innerHTML = `
       ${alerts.join('')}
@@ -1942,6 +1947,7 @@
           ${section('En direct', opList(d.recent, true, 'Aucune opération récente.'), '<a href="#/journal" class="small" style="text-transform:none;color:var(--brand-ink)">Tout le journal</a>')}
         </div>
       </div>`;
+    const av = m.querySelector('[data-avalider]'); if (av) av.onclick = () => { S.dsf = Object.assign(S.dsf || { type: '', q: '' }, { status: 'avalider' }); };
     const al = m.querySelector('[data-avoirlist]');
     if (al) al.onclick = () => { S.cl.sort = 'avoir'; S.cl.q = ''; };
   }
@@ -2120,7 +2126,7 @@
     return `<button class="row" data-dossier="${d.id}"><div class="ico neu">${icon((D_TYPES.find(x => x[0] === d.type) || [])[2] || 'list')}</div>
       <div class="main"><div class="t">${esc(dTypeName(d.type))} · ${esc(main || '')}</div>
         <div class="s">${esc([d.ref, d.partenaire, d.service, d.card_ref_masked, fmtDate(isoDay(new Date(d.created_at)))].filter(Boolean).join(' · '))}</div></div>
-      <div class="end"><div class="amt num">${fmt(Math.abs(d.amount))}</div>${dTag(d.status)}</div></button>`;
+      <div class="end"><div class="amt num">${fmt(Math.abs(d.amount))}</div>${dTag(d.status)}${((d.info || {}).reponses || []).some(r => !r.etat) && ['en_attente', 'en_cours', 'partiel'].includes(d.status) ? ' <span class="tag red">réponse à valider</span>' : ''}</div></button>`;
   }
   const bindDossiers = (root, after) => root.querySelectorAll('[data-dossier]').forEach(b => b.onclick = () => sheetDossier(Number(b.dataset.dossier), after));
 
@@ -2144,7 +2150,7 @@
           const sup = k === 'fournisseur' && p.kind === 'les_deux' && p.cards_position != null;
           const x = posText(sup ? p.cards_position : p.position, k);
           return `<button class="row" data-part="${p.id}"><div class="ico rc">${esc(initials(p.name))}</div>
-            <div class="main"><div class="t">${esc(p.name)} ${p.kind === 'les_deux' ? `<span class="tag brand">${k === 'partenaire' ? 'aussi fournisseur' : 'aussi partenaire'}</span>` : ''} ${p.active ? '' : '<span class="tag">inactif</span>'} ${p.pending_n ? `<span class="tag amber">${p.pending_n} en attente</span>` : ''}</div>
+            <div class="main"><div class="t">${esc(p.name)} ${p.kind === 'les_deux' ? `<span class="tag brand">${k === 'partenaire' ? 'aussi fournisseur' : 'aussi partenaire'}</span>` : ''} ${p.active ? '' : '<span class="tag">inactif</span>'} ${p.pending_n ? `<span class="tag amber">${p.pending_n} en attente</span>` : ''} ${p.to_validate ? `<span class="tag red">${p.to_validate} réponse(s) à valider</span>` : ''}</div>
               <div class="s">${esc([p.country, x.t + (x.amt ? ' ' + fmt(x.amt) : ''), sup ? 'achats de cartes · opérations financières : ' + lcFirst(posLine(p.position)) : p.cards_position != null && Number(p.cards_position) ? 'cartes : ' + lcFirst(posLine(p.cards_position, 'fournisseur')) : ''].filter(Boolean).join(' · '))}</div></div>
             <div class="end"><div class="amt num ${x.cls}">${x.amt ? (x.cls === 'pos' ? '+' : '−') + fmt(x.amt) : 'à jour'}</div></div></button>`;
         }).join('') : `<div class="empty">Aucun ${k} pour le moment.</div>`}</div>
@@ -2201,6 +2207,7 @@
         ${field('Interlocuteurs et coordonnées', ta('contacts', 'Nom, téléphone, e-mail…'))}
         ${field('Produits et services fournis', ta('products', 'Cartes, alimentation UBA / GTCO, recharges Ecobank…'))}
         <div class="grid2">${field('Coordonnées bancaires', ta('bank_details'))}${field('Numéros mobile money', ta('momo'))}</div>
+        ${field('Numéro WhatsApp (pour lui envoyer les demandes)', `<input class="input" name="whatsapp" inputmode="tel" value="${esc(x.whatsapp || '')}" placeholder="+225 07 00 00 00">`)}
         <div class="grid2">${field('Conditions commerciales (prix, frais, commissions)', ta('conditions'))}${field('Conditions de paiement', ta('payment_terms'))}</div>
         ${field('Note', ta('note'))}
         <label class="check"><input type="checkbox" name="cartes_compensees" ${x.cartes_compensees ? 'checked' : ''}> Les achats de cartes entrent dans le même solde (compensation)</label>
@@ -2211,7 +2218,7 @@
         chipGroup(c, 'pk');
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
           const v = { id: p ? p.id : null };
-          ['name', 'country', 'contacts', 'products', 'bank_details', 'momo', 'conditions', 'payment_terms', 'note'].forEach(k => { v[k] = c.q(`[name=${k}]`).value; });
+          ['name', 'country', 'contacts', 'products', 'bank_details', 'momo', 'conditions', 'payment_terms', 'note', 'whatsapp'].forEach(k => { v[k] = c.q(`[name=${k}]`).value; });
           v.cartes_compensees = c.q('[name=cartes_compensees]').checked;
           v.kind = chipVal(c, 'pk');
           if (c.q('[name=active]')) v.active = c.q('[name=active]').checked;
@@ -2454,13 +2461,18 @@
       if (mgr) A('annuler', 'Annuler', 'danger');
     }
     if (['echouee'].includes(d.status) && Number(d.encaisse) > Number(d.rembourse)) A('rembourser', 'Rembourser le client', 'primary');
+    if (d.partenaire_id) A('wa', `${icon('chat')} Envoyer au partenaire (WhatsApp)`);
     A('piece', `${icon('upload')} Justificatif`); A('reference', 'Référence');
     const c = sheet({
       title: `${dTypeName(d.type)} · ${d.ref}`, wide: true,
       body: `<div class="cols"><div><dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${k === 'Statut' ? dTag(d.status) : k === 'Carte'
-          ? `<span id="cref">${esc(d.card_ref_masked || '')}</span>${mgr && d.card_ref && d.card_ref !== d.card_ref_masked ? ' <button class="btn small" type="button" id="showref">Afficher</button>' : ''}` : esc(v)}</dd>`).join('')}</dl>
+          ? `<span id="cref">${esc(d.card_ref_masked || '')}</span>${d.card_ref && d.card_ref !== d.card_ref_masked ? ' <button class="btn small" type="button" id="showref">Afficher</button>' : ''}` : esc(v)}</dd>`).join('')}</dl>
           ${lines ? section(d.type === 'appro' ? 'Comptes à alimenter' : 'Cartes commandées', lines) : ''}</div>
-        <div>${section('Justificatifs', d.pieces.length ? `<div class="list">${d.pieces.map(x => `<button class="row" data-piece="${x.id}"><div class="ico neu">${icon('receipt')}</div><div class="main"><div class="t">${esc(x.name || 'Pièce')}</div><div class="s">${fmtDT(x.created_at)}</div></div>${icon('chev')}</button>`).join('')}</div>` : '<div class="list"><div class="empty">Aucun justificatif.</div></div>')}
+        <div>${(d.info && d.info.reponses || []).length ? section('Réponses du partenaire', `<div class="list">${d.info.reponses.map((r, i) => `<div class="row"><div class="ico ${r.reponse === 'fait' ? 'in' : 'out'}">${icon(r.reponse === 'fait' ? 'in' : 'out')}</div>
+            <div class="main"><div class="t">${r.reponse === 'fait' ? 'Fait' : 'Échoué'} · ${esc(r.by || '')} <span class="tag ${({ '': 'amber', valide: 'green', rejete: 'red' })[r.etat || '']}">${({ '': 'à valider', valide: 'validée', rejete: 'refusée' })[r.etat || '']}</span></div>
+              <div class="s">${esc([fmtDT(r.at), r.account, r.amount ? fmt(r.amount) : '', r.reference ? 'réf. ' + r.reference : '', r.note, r.motif ? 'motif : ' + r.motif : ''].filter(Boolean).join(' · '))}</div></div>
+            ${mgr && open && !r.etat && !['reussie', 'termine'].includes(d.status) ? `<div class="end" style="display:flex;gap:6px"><button class="btn small primary" data-rv="${i}">Valider</button><button class="btn small" data-rr="${i}">Refuser</button></div>` : ''}</div>`).join('')}</div>`) : ''}
+          ${section('Justificatifs', d.pieces.length ? `<div class="list">${d.pieces.map(x => `<button class="row" data-piece="${x.id}"><div class="ico neu">${icon('receipt')}</div><div class="main"><div class="t">${esc(x.name || 'Pièce')}</div><div class="s">${fmtDT(x.created_at)}</div></div>${icon('chev')}</button>`).join('')}</div>` : '<div class="list"><div class="empty">Aucun justificatif.</div></div>')}
           ${section('Mouvements enregistrés', d.ops.length ? `<div class="list">${d.ops.map(o => `<div class="row ${o.status !== 'ok' ? 'cancelled' : ''}"><div class="main"><div class="t">${esc(STAGES[o.stage] || o.stage)} · ${fmt(o.amount)}</div><div class="s">${esc([fmtDT(o.created_at), o.agent, o.account].filter(Boolean).join(' · '))}${o.status !== 'ok' ? ' · annulé' : ''}</div></div></div>`).join('')}</div>` : '<div class="list"><div class="empty">Rien n’est encore confirmé : aucun solde n’a changé.</div></div>')}</div></div>`,
       foot: acts.join(''),
       onMount(c) {
@@ -2472,6 +2484,22 @@
            ${field('Montant reçu', moneyInput('amount', `autofocus value="${fmtN(b.dataset.rest)}"`))}
            ${field('Référence', '<input class="input" name="reference" autocomplete="off">')}`, reopen));
         c.qa('[data-act]').forEach(b => b.onclick = () => doAction(d, b.dataset.act, reopen));
+        // Valider la réponse du partenaire = enregistrer l'effet qu'il annonce (une seule fois).
+        c.qa('[data-rv]').forEach(b => b.onclick = async () => {
+          const i = Number(b.dataset.rv), r = d.info.reponses[i];
+          const pl = { dossier_id: d.id, reply_index: i, idem_key: uid(), reference: r.reference, amount: r.amount };
+          if (r.reponse === 'echoue') Object.assign(pl, { action: 'echec', reason: r.note || 'Échec signalé par le partenaire' });
+          else if (d.type === 'appro') Object.assign(pl, { action: 'alimentation', account_id: r.account_id });
+          else Object.assign(pl, { action: 'execution' });
+          const txt = r.reponse === 'echoue' ? 'L’opération sera marquée échouée.' : d.type === 'appro' ? `${r.account} sera crédité de ${fmt(r.amount)}, déduit du compte du partenaire.` : `${fmt(r.amount)} sera enregistré comme dû au partenaire.`;
+          if (!await ask('Valider la réponse du partenaire', `<p>${esc(txt)}</p><p class="small muted">Référence : ${esc(r.reference || '—')}</p>`, 'Valider')) return;
+          try { const res = await rpc('dossier_action', pl); toast(`Validé. ${posMsg(res)}`, 'ok'); reopen(); } catch (e) { toast(e.message, 'bad'); }
+        });
+        c.qa('[data-rr]').forEach(b => b.onclick = async () => {
+          const reason = await askText('Refuser la réponse', 'Motif (le partenaire le verra)', { okLabel: 'Refuser', danger: true });
+          if (!reason) return;
+          try { await rpc('dossier_action', { dossier_id: d.id, action: 'rejeter_reponse', reply_index: Number(b.dataset.rr), reason, idem_key: uid() }); toast('Réponse refusée.', 'ok'); reopen(); } catch (e) { toast(e.message, 'bad'); }
+        });
       },
     });
     S._dossierSheet = c;
@@ -2532,6 +2560,11 @@
       case 'reference': return actForm(d, act, 'Référence et détails', `${field('Référence externe', `<input class="input" name="reference" value="${esc(d.reference || '')}">`)}
         ${field('Détails', `<input class="input" name="details" value="${esc(d.details || '')}">`)}`, after);
       case 'piece': return addPiece(d, after);
+      case 'wa': {
+        const list = S.partenaires && S.partenaires.length ? S.partenaires : await rpc('list_partenaires');
+        if (d.type === 'cartes' && !S._stock) S._stock = await rpc('list_stock');
+        return waDossier(d, (list.find(x => x.id === d.partenaire_id) || {}).whatsapp);
+      }
       case 'echec': case 'annuler': case 'cloturer': {
         const reason = await askText(act === 'annuler' ? 'Annuler le dossier' : act === 'echec' ? 'Opération échouée' : 'Clôturer le dossier',
           act === 'annuler' ? 'Motif (les effets déjà confirmés seront contre-passés)' : 'Motif', { okLabel: 'Confirmer', danger: act !== 'cloturer', required: act === 'annuler' });
@@ -2635,14 +2668,15 @@
     const types = D_TYPES.filter(t => mgr || AGENT_TYPES.includes(t[0]));
     m.innerHTML = `
       <div class="actions four">${types.filter(t => t[0] !== 'ouverture').map(t => `<button class="action" data-new="${t[0]}">${icon(t[2])}${esc(t[1])}</button>`).join('')}</div>
-      <div class="chips">${[['pending', 'En attente'], ['', 'Toutes'], ['echouee', 'Échouées'], ['annulee', 'Annulées']].map(([k, l]) => `<button class="chip ${f.status === k ? 'on' : ''}" data-st="${k}">${l}</button>`).join('')}</div>
+      <div class="chips">${[['pending', 'En attente'], ['avalider', 'Réponses à valider'], ['', 'Toutes'], ['echouee', 'Échouées'], ['annulee', 'Annulées']].map(([k, l]) => `<button class="chip ${f.status === k ? 'on' : ''}" data-st="${k}">${l}</button>`).join('')}</div>
       <div class="filters"><select class="input" id="dtype">${options(types.map(t => [t[0], t[1]]), f.type, 'Tous les types')}</select>
         <input class="input" id="dq" placeholder="Référence, client, bénéficiaire…" value="${esc(f.q)}"></div>
       <div id="dres"><div class="spinner"></div></div>`;
     m.querySelectorAll('[data-new]').forEach(b => b.onclick = () => sheetNewDossier(b.dataset.new, null, () => route()));
     m.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { f.status = b.dataset.st; route(); });
     const load = async () => {
-      const list = await rpc('list_dossiers', { status: f.status || null, type: f.type || null, q: f.q || null });
+      let list = await rpc('list_dossiers', { status: f.status === 'avalider' ? 'pending' : (f.status || null), type: f.type || null, q: f.q || null });
+      if (f.status === 'avalider') list = list.filter(d => ((d.info || {}).reponses || []).some(r => !r.etat));
       const box = m.querySelector('#dres'); if (!box) return;
       box.innerHTML = list.length ? `<div class="list">${list.map(dossierRow).join('')}</div>` : '<div class="list"><div class="empty">Aucune opération.</div></div>';
       bindDossiers(box, () => route());
@@ -2693,6 +2727,132 @@
           active: c.q('[name=active]') ? c.q('[name=active]').checked : true });
         c.close(); toast('Enregistré.', 'ok'); await loadBoot(); route(); }); },
     });
+  }
+
+  // ---------------------------------------------------------------- espace partenaire (compte de rôle « partenaire »)
+  // Vu du partenaire : un solde positif chez AYAEL signifie « vous devez à AYAEL ».
+  const ppos = b => { b = Number(b) || 0; return Math.abs(b) < 1 ? { t: 'Compte équilibré avec AYAEL', amt: 0, cls: '' }
+    : b > 0 ? { t: 'Vous devez à AYAEL', amt: b, cls: 'neg' } : { t: 'AYAEL vous doit', amt: -b, cls: 'pos' }; };
+  const REP_ETAT = { '': ['En attente de validation par AYAEL', 'amber'], valide: ['Validée par AYAEL', 'green'], rejete: ['Refusée par AYAEL', 'red'] };
+  function notifyNew(list) {
+    const body = list.map(d => `${d.ref} · ${dTypeName(d.type)}${d.client ? ' · ' + d.client : ''} · ${fmt(d.due_partner ?? d.amount)}`).join('\n');
+    const title = list.length > 1 ? `${list.length} nouvelles demandes d’AYAEL` : 'Nouvelle demande d’AYAEL';
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.ready.then(r => r.showNotification(title, { body, icon: 'icons/icon-192.png', tag: 'ayael-demande' }));
+        else new Notification(title, { body, icon: 'icons/icon-192.png' });
+      }
+    } catch (e) { /* les alertes ne sont pas disponibles sur cet appareil */ }
+    toast(title, 'ok');
+  }
+  function portalCard(d) {
+    const due = d.due_partner ?? d.amount;
+    let what = '';
+    if (d.type === 'recharge') what = `<div class="pc-big">Recharger la carte <b>${esc(d.service || '')}</b> de <b>${esc(d.client || '')}</b></div>
+        <div class="pc-ref"><span class="num">${esc(d.card_ref || '')}</span> <button class="btn small" type="button" data-copy="${esc(d.card_ref || '')}">Copier</button></div>
+        <div>Montant à recharger : <b>${fmt(due)}</b></div>`;
+    else if (d.type === 'appro') what = `<div class="pc-big">Alimenter nos comptes de recharge</div>${d.lines.map(l => `<div>${esc(l.account || '')} ${l.bank ? '(' + esc(l.bank) + ')' : ''} : <b>${fmt(l.amount)}</b></div>`).join('')}
+        ${Number(d.alimente) ? `<div class="small muted">Déjà reçu et validé : ${fmt(d.alimente)}</div>` : ''}`;
+    else if (d.type === 'transfert_out') what = `<div class="pc-big">Payer <b>${esc(d.beneficiary || '')}</b>${d.beneficiary_phone ? ' · ' + esc(d.beneficiary_phone) : ''}</div>
+        <div>${esc(d.service || '')} · donneur d’ordre : ${esc(d.donneur || '')}</div><div>Montant à payer : <b>${fmt(due)}</b></div>`;
+    else if (d.type === 'cartes') what = `<div class="pc-big">Commande de cartes${d.invoice_ref ? ' · facture ' + esc(d.invoice_ref) : ''}</div>${d.lines.map(l => `<div>${esc(l.card_type || 'Cartes')} : <b>${l.qty}</b> × ${fmt(l.unit_price)}</div>`).join('')}`;
+    else if (d.type === 'paiement') what = `<div class="pc-big">AYAEL paie <b>${esc(d.beneficiary || '')}</b> pour vous</div><div>Montant : <b>${fmt(d.amount)}</b></div>`;
+    else if (d.type === 'transfert_in') what = `<div class="pc-big">AYAEL paie <b>${esc(d.beneficiary || '')}</b> (fonds reçus chez vous)</div><div>${esc(d.service || '')} · montant : <b>${fmt(d.amount)}</b></div>`;
+    const can = ['recharge', 'appro', 'transfert_out'].includes(d.type) && ['en_attente', 'en_cours', 'partiel'].includes(d.status)
+      && (d.type === 'appro' || !(d.reponses || []).some(r => !r.etat));
+    const reps = (d.reponses || []).map(r => `<div class="small" style="margin-top:4px"><span class="tag ${REP_ETAT[r.etat || ''][1]}">${r.reponse === 'fait' ? 'Fait' : 'Échoué'} · ${REP_ETAT[r.etat || ''][0]}</span>
+        ${esc([fmtDT(r.at), r.account, r.amount ? fmt(r.amount) : '', r.reference ? 'réf. ' + r.reference : '', r.note, r.motif ? 'motif : ' + r.motif : ''].filter(Boolean).join(' · '))}</div>`).join('');
+    return `<div class="card pad pcard"><div class="pc-top"><span class="tag">${esc(d.ref)}</span> ${dTag(d.status)} <span class="small muted">${fmtDT(d.created_at)}</span></div>
+      ${what}${d.details ? `<div class="small muted">${esc(d.details)}</div>` : ''}${reps}
+      ${d.pieces && d.pieces.length ? `<div class="small" style="margin-top:6px">${d.pieces.map(x => `<a href="#" data-piece="${x.id}">${icon('receipt')} ${esc(x.name || 'pièce')}</a>`).join(' · ')}</div>` : ''}
+      <div class="pc-acts">${can ? `<button class="btn primary small" data-rep="fait" data-d="${d.id}">Fait</button><button class="btn small" data-rep="echoue" data-d="${d.id}">Échoué</button>` : ''}
+        <button class="btn small" data-pj="${d.id}">${icon('upload')} Preuve</button></div></div>`;
+  }
+  async function vPortail(m) {
+    const P = await rpc('partner_portal');
+    S._portal = P;
+    if (S._portalIds) { const nw = P.pending.filter(d => !S._portalIds.includes(d.id)); if (nw.length) notifyNew(nw); }
+    S._portalIds = P.pending.map(d => d.id);
+    const seen = P.seen_at ? new Date(P.seen_at).getTime() : 0;
+    const nouv = P.pending.filter(d => new Date(d.created_at).getTime() > seen).length;
+    document.title = `${nouv ? '(' + nouv + ') ' : ''}Mes demandes · Ayael`;
+    const x = ppos(P.position);
+    const notifOk = !('Notification' in window) || Notification.permission === 'granted';
+    m.innerHTML = `
+      <div class="hero"><div class="label">${esc(P.partenaire)} · ${esc(x.t)}</div><div class="big num">${fmt(x.amt)}</div>
+        <div class="sub">Opérations validées par ${esc(P.company || 'AYAEL')}. Vos réponses comptent après leur validation.</div></div>
+      ${P.cards_position != null && Number(P.cards_position) ? `<div class="alert info"><span><b>Achats de cartes :</b> ${esc(ppos(P.cards_position).t)} ${fmt(ppos(P.cards_position).amt)}</span></div>` : ''}
+      ${notifOk ? '' : `<div class="alert warn"><span>Activez les alertes pour être prévenu de chaque nouvelle demande sur cet appareil. <button class="btn small" id="notif">Activer les alertes</button></span></div>`}
+      ${section(`Demandes à traiter (${P.pending.length})${nouv ? ` · <span class="tag red">${nouv} nouvelle(s)</span>` : ''}`,
+        P.pending.length ? P.pending.map(portalCard).join('') : '<div class="list"><div class="empty">Aucune demande en attente. 👍</div></div>')}
+      ${section('Historique', P.recent.length ? P.recent.map(portalCard).join('') : '<div class="list"><div class="empty">Aucune opération.</div></div>')}`;
+    const nb = m.querySelector('#notif'); if (nb) nb.onclick = async () => { try { await Notification.requestPermission(); } catch (e) {} route(); };
+    m.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(b.dataset.copy); toast('Référence copiée.', 'ok'); });
+    m.querySelectorAll('[data-piece]').forEach(a => a.onclick = e => { e.preventDefault(); openPiece(Number(a.dataset.piece)); });
+    m.querySelectorAll('[data-pj]').forEach(b => b.onclick = () => addPiece({ id: Number(b.dataset.pj) }, () => route()));
+    m.querySelectorAll('[data-rep]').forEach(b => b.onclick = () => sheetPartnerReply([...P.pending].find(d => d.id === Number(b.dataset.d)), b.dataset.rep));
+    if (nouv) rpc('partner_seen').catch(() => {});
+  }
+  function sheetPartnerReply(d, rep) {
+    const ok = rep === 'fait';
+    sheet({
+      title: `${ok ? 'Fait' : 'Échoué'} · ${d.ref}`,
+      body: `${ok ? `<p class="small muted" style="margin-top:0">Votre réponse sera validée par AYAEL avant de compter dans le solde.</p>
+          ${d.type === 'appro' ? field('Compte alimenté', `<select class="input" name="account_id">${options(d.lines.map(l => [l.account_id, `${l.account} · ${fmt(l.amount)}`]))}</select>`) : ''}
+          ${field(d.type === 'appro' ? 'Montant alimenté' : 'Montant', moneyInput('amount', `value="${fmtN(d.type === 'appro' ? (d.lines[0] || {}).amount : (d.due_partner ?? d.amount))}"`))}
+          ${field('Référence de l’opération (preuve)', '<input class="input autofocus" name="reference" autocomplete="off">')}` : ''}
+        ${field(ok ? 'Note (facultatif)' : 'Motif de l’échec', `<input class="input ${ok ? '' : 'autofocus'}" name="note" autocomplete="off">`)}`,
+      foot: `<button class="btn primary" data-x="ok">Envoyer à AYAEL</button>`,
+      onMount(c) {
+        const s = c.q('[name=account_id]'); if (s) s.onchange = () => { const l = d.lines.find(x => x.account_id === Number(s.value)); c.q('[name=amount]').value = fmtN(l.amount); };
+        c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          if (!ok && !c.q('[name=note]').value.trim()) throw new Error('Indiquez le motif.');
+          await rpc('partner_reply', { dossier_id: d.id, reponse: rep, reference: (c.q('[name=reference]') || {}).value, note: c.q('[name=note]').value,
+            amount: c.q('[name=amount]') ? parseAmt(c.q('[name=amount]').value) : null, account_id: s ? Number(s.value) : null });
+          c.close(); toast('Réponse envoyée à AYAEL.', 'ok'); route();
+        });
+      },
+    });
+  }
+  async function vPReleve(m) {
+    const f = S.prf || (S.prf = { from: period('month')[0], to: todayIso() });
+    const P = S._portal || await rpc('partner_portal');
+    const R = await rpc('releve_partenaire', { id: P.partenaire_id, from: f.from, to: f.to });
+    let run = Number(R.opening);
+    const rows = R.lines.map(l => { run += Number(l.variation); return Object.assign({}, l, { solde: run }); });
+    const sg = v => (v > 0 ? '+' : v < 0 ? '−' : '') + fmtN(Math.abs(v));
+    m.innerHTML = `<div class="filters"><input class="input" type="date" id="pf" value="${f.from}"><input class="input" type="date" id="pt" value="${f.to}"></div>
+      <p class="small muted" style="margin:0 4px 8px">+ : vous devez à AYAEL · − : AYAEL vous doit. Seules les opérations validées comptent.</p>
+      <div class="dtable scrollx"><table><thead><tr><th>Date</th><th>Réf.</th><th>Opération</th><th class="r">Variation</th><th class="r">Solde</th></tr></thead><tbody>
+        <tr><td>${fmtDate(R.from)}</td><td></td><td><b>Solde initial</b> — ${esc(ppos(R.opening).t)}</td><td></td><td class="r num">${sg(R.opening)}</td></tr>
+        ${rows.map(l => `<tr class="${l.reversal ? 'cancelled' : ''}"><td class="num">${fmtDate(isoDay(new Date(l.at)))}</td><td class="sub">${esc(l.ref || '')}</td><td>${esc((l.reversal ? 'Annulation · ' : '') + (l.details || ''))}</td>
+          <td class="r num">${sg(l.variation)}</td><td class="r num">${sg(l.solde)}</td></tr>`).join('')}
+        <tr><td>${fmtDate(R.to)}</td><td></td><td><b>Solde final</b> — ${esc(ppos(R.closing).t)} ${fmt(ppos(R.closing).amt)}</td><td></td><td class="r num"><b>${sg(R.closing)}</b></td></tr></tbody></table></div>
+      <button class="btn block" id="px" style="margin-top:12px">${icon('download')} Télécharger en Excel</button>`;
+    m.querySelector('#pf').onchange = e => { f.from = e.target.value; route(); };
+    m.querySelector('#pt').onchange = e => { f.to = e.target.value; route(); };
+    m.querySelector('#px').onclick = e => busy(e.currentTarget, async () => {
+      await loadXLSX(); const XL = window.XLSX, wb = XL.utils.book_new();
+      const ws = XL.utils.json_to_sheet([{ Date: fmtDate(R.from), 'Opération': 'Solde initial', Solde: Number(R.opening) },
+        ...rows.map(l => ({ Date: fmtDate(isoDay(new Date(l.at))), 'Référence': l.ref || '', 'Opération': (l.reversal ? 'Annulation · ' : '') + (l.details || ''), Variation: Number(l.variation), Solde: l.solde })),
+        { Date: fmtDate(R.to), 'Opération': 'Solde final — ' + ppos(R.closing).t, Solde: Number(R.closing) }]);
+      XL.utils.book_append_sheet(wb, ws, 'Relevé'); XL.writeFile(wb, `Releve AYAEL ${R.from} au ${R.to}.xlsx`);
+    });
+  }
+
+  // Message WhatsApp prêt à envoyer au partenaire (un clic côté AYAEL).
+  function waDossier(d, phone) {
+    const co = company();
+    const lines = [`*${co.name}* · demande ${d.ref}`, dTypeName(d.type)];
+    if (d.type === 'recharge') lines.push(`Client : ${d.client || ''}`, `Carte ${d.service || ''} : ${d.card_ref || ''}`, `Montant à recharger : ${fmt(d.due_partner ?? d.amount)}`);
+    else if (d.type === 'appro') d.lines.forEach(l => lines.push(`${(acc(l.account_id) || {}).name || 'Compte'} : ${fmt(l.amount)}`));
+    else if (d.type === 'cartes') d.lines.forEach(l => lines.push(`${(((S._stock || []).find(t => t.id === l.card_type_id)) || {}).name || 'Cartes'} : ${l.qty} × ${fmt(l.unit_price)}`));
+    else lines.push(`Bénéficiaire : ${d.beneficiary || ''}${d.beneficiary_phone ? ' (' + d.beneficiary_phone + ')' : ''}`, `Montant : ${fmt(d.due_partner ?? d.amount)}`, d.service ? `Service : ${d.service}` : '');
+    if (d.details) lines.push(d.details);
+    lines.push('', `Répondez « Fait » avec la référence dans votre espace : ${location.origin}${location.pathname}`);
+    const u = waLink(phone, lines.filter(x => x !== null).join('\n'));
+    if (!u) return toast('Ajoutez le numéro WhatsApp dans la fiche du partenaire.', 'bad');
+    window.open(u, '_blank', 'noopener');
   }
 
   function sheetTransfert(fromId) {
@@ -3020,7 +3180,8 @@
       title: t.full_name || 'Utilisateur',
       body: `${field('Nom affiché', `<input class="input" name="full_name" value="${esc(t.full_name)}">`)}
         ${field('Agence', `<select class="input" name="agence">${options((S.agences || []).map(g => [g.id, g.name]), t.agence_id || mainAgence().id)}</select>`)}
-        ${field('Rôle', `<select class="input" name="role">${options([['agent', 'Agent'], ['sous_gerant', 'Sous-gérant(e) (droits à cocher ci-dessous)'], ['gerant', 'Gérant(e) d’agence (gère toute son agence)'], ['gerante', 'Direction (voit toutes les agences, règle tout)']], t.role)}</select>`)}
+        ${field('Rôle', `<select class="input" name="role">${options([['agent', 'Agent'], ['sous_gerant', 'Sous-gérant(e) (droits à cocher ci-dessous)'], ['gerant', 'Gérant(e) d’agence (gère toute son agence)'], ['gerante', 'Direction (voit toutes les agences, règle tout)'], ['partenaire', 'Partenaire (voit seulement son espace partenaire)']], t.role)}</select>`)}
+        <div id="partbox" class="hidden">${field('Fiche partenaire', '<select class="input" name="partenaire_id"><option value="">Chargement…</option></select>', 'Il verra uniquement les demandes et le solde de ce partenaire.')}</div>
         <label class="check"><input type="checkbox" name="active" ${t.active ? 'checked' : ''}> Compte actif (peut se connecter)</label>
         <label class="check"><input type="checkbox" name="can_caisse" ${t.can_caisse ? 'checked' : ''}> Droit : opérations de caisse</label>
         <label class="check"><input type="checkbox" name="can_recharge" ${t.can_recharge ? 'checked' : ''}> Droit : recharges de cartes</label>
@@ -3029,12 +3190,14 @@
         <p class="small muted">Identifiant de connexion : « ${esc(t.login || '')} ». Désactiver un compte bloque la connexion sans effacer son historique.</p>`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
-        const showPerms = () => c.q('#permbox').classList.toggle('hidden', c.q('[name=role]').value !== 'sous_gerant');
+        const showPerms = () => { const rl = c.q('[name=role]').value; c.q('#permbox').classList.toggle('hidden', rl !== 'sous_gerant'); c.q('#partbox').classList.toggle('hidden', rl !== 'partenaire'); };
+        rpc('list_partenaires').then(l => { const s = c.q('[name=partenaire_id]'); if (s) s.innerHTML = options(l.filter(x => x.kind !== 'fournisseur').map(x => [x.id, x.name]), t.partenaire_id || '', '— Choisir —'); }).catch(() => {});
         c.q('[name=role]').onchange = showPerms; showPerms();
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
           const perms = Object.fromEntries(PERMS.map(([k]) => ['perm_' + k, c.q(`[name=perm_${k}]`).checked]));
           await rpc('save_profile', Object.assign({ id: t.id, full_name: c.q('[name=full_name]').value, role: c.q('[name=role]').value, agence_id: Number(c.q('[name=agence]').value),
-            active: c.q('[name=active]').checked, can_caisse: c.q('[name=can_caisse]').checked, can_recharge: c.q('[name=can_recharge]').checked }, perms));
+            active: c.q('[name=active]').checked, can_caisse: c.q('[name=can_caisse]').checked, can_recharge: c.q('[name=can_recharge]').checked,
+            partenaire_id: c.q('[name=partenaire_id]').value ? Number(c.q('[name=partenaire_id]').value) : null }, perms));
           c.close(); toast('Enregistré.', 'ok'); await loadBoot(); route();
         });
       },
@@ -3486,6 +3649,8 @@
     fournisseurs: { title: 'Partenaires et fournisseurs', render: vPartenaires, live: true, mgr: true, perm: 'fournisseurs' },
     dossiers: { title: 'Opérations partenaires', render: vDossiers, live: true, need: 'can_caisse' },
     credits: { title: 'Crédits clients', render: vCredits, live: true },
+    portail: { title: 'Mes demandes', render: vPortail, live: true, partner: true },
+    preleve: { title: 'Relevé et position', render: vPReleve, partner: true },
     stock: { title: 'Stock de cartes', render: vStock, live: true, mgr: true },
     plus: { title: 'Plus', render: vPlus, mgr: true },
     rapports: { title: 'Rapports', render: vRapports, mgr: true, perm: 'clotures' },

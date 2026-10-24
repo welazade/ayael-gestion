@@ -188,7 +188,7 @@ alter table operations add column if not exists agence_id bigint references agen
 alter table closings   add column if not exists agence_id bigint references agences(id);
 create index if not exists operations_agence_idx on operations(agence_id, op_day);
 alter table profiles drop constraint if exists profiles_role_check;
-alter table profiles add constraint profiles_role_check check (role in ('gerante','gerant','sous_gerant','agent'));
+alter table profiles add constraint profiles_role_check check (role in ('gerante','gerant','sous_gerant','agent','partenaire'));
 
 -- Droits cochés pour un(e) sous-gérant(e) (un gérant d'agence les a tous sur son agence).
 alter table profiles add column if not exists perm_appro        boolean not null default false;
@@ -365,6 +365,10 @@ alter table credit_allocs enable row level security;
 alter table partenaires add column if not exists kind text not null default 'fournisseur';
 alter table partenaires drop constraint if exists partenaires_kind_check;
 alter table partenaires add constraint partenaires_kind_check check (kind in ('fournisseur','partenaire','les_deux'));
+alter table partenaires add column if not exists whatsapp text;          -- numéro pour les alertes WhatsApp
+-- Compte de connexion d'un partenaire (rôle « partenaire ») : accès à son seul espace.
+alter table profiles add column if not exists partenaire_id bigint references partenaires(id);
+alter table profiles add column if not exists seen_at timestamptz;
 
 -- Les fournisseurs existants ont une fiche (type « fournisseur ») (une seule fois).
 insert into partenaires(account_id, name, contacts, note, kind)
@@ -416,6 +420,11 @@ begin
   select * into r from profiles where id = auth.uid();
   if r.id is null then raise exception 'Vous n''êtes pas connecté(e).'; end if;
   if not r.active then raise exception 'Compte non activé. Demandez à la gérante de l''activer.'; end if;
+  -- Un compte partenaire n'a accès qu'à son espace (fonctions partner_* et pièces de ses dossiers).
+  if r.role = 'partenaire' and coalesce(need, '') not in ('partenaire', 'any') then
+    raise exception 'Accès réservé à AYAEL. Votre espace partenaire ne permet pas cette action.';
+  end if;
+  if need = 'partenaire' and r.role <> 'partenaire' then raise exception 'Espace réservé aux partenaires.'; end if;
   if need = 'gerante' and r.role <> 'gerante' then raise exception 'Action réservée à la direction (gérante de l''agence principale).'; end if;
   if need = 'manager' and r.role = 'agent' then raise exception 'Action réservée aux gérants.'; end if;
   if need = 'caisse' and r.role = 'agent' and not r.can_caisse then raise exception 'Vous n''avez pas le droit de saisir des opérations de caisse.'; end if;
@@ -651,6 +660,12 @@ begin
   select * into me from profiles where id = auth.uid();
   if me.id is null then return jsonb_build_object('me', null); end if;
   if not me.active then return jsonb_build_object('me', to_jsonb(me)); end if;
+  -- Espace partenaire : rien d'autre que sa fiche et les coordonnées d'AYAEL.
+  if me.role = 'partenaire' then
+    return jsonb_build_object('me', to_jsonb(me) || jsonb_build_object('partenaire', (select name from partenaires where id = me.partenaire_id)),
+      'accounts', '[]'::jsonb, 'products', '[]'::jsonb, 'team', '[]'::jsonb, 'agences', '[]'::jsonb,
+      'settings', jsonb_build_object('company', (select value from settings where key = 'company')));
+  end if;
   cid := _caisse_of(me.id);
   return jsonb_build_object(
     'me', to_jsonb(me) || jsonb_build_object('caisse_id', cid,
@@ -1436,7 +1451,17 @@ begin
   if uid = me.id and (coalesce(_txt(p,'role'),'gerante') <> 'gerante' or not coalesce((p->>'active')::boolean, true)) then
     raise exception 'Vous ne pouvez pas retirer vos propres droits de direction.';
   end if;
-  if _txt(p,'role') is not null and _txt(p,'role') not in ('gerante','gerant','sous_gerant','agent') then raise exception 'Rôle inconnu.'; end if;
+  if _txt(p,'role') is not null and _txt(p,'role') not in ('gerante','gerant','sous_gerant','agent','partenaire') then raise exception 'Rôle inconnu.'; end if;
+  if _txt(p,'role') = 'partenaire' then
+    if _num(p,'partenaire_id') is null or not exists (select 1 from partenaires where id = _num(p,'partenaire_id')::bigint and kind <> 'fournisseur') then
+      raise exception 'Choisissez la fiche partenaire de cette personne.';
+    end if;
+    update profiles set partenaire_id = _num(p,'partenaire_id')::bigint, can_caisse = false, can_recharge = false,
+      perm_appro = false, perm_produits = false, perm_ajust = false, perm_clotures = false, perm_fournisseurs = false
+    where id = uid;
+  elsif _txt(p,'role') is not null then
+    update profiles set partenaire_id = null where id = uid;
+  end if;
   if _num(p,'agence_id') is not null and not exists (select 1 from agences where id = _num(p,'agence_id')::bigint) then
     raise exception 'Agence introuvable.';
   end if;
@@ -1454,7 +1479,7 @@ begin
     active = coalesce((p->>'active')::boolean, active)
   where id = uid returning * into r;
   if r.id is null then raise exception 'Utilisateur introuvable.'; end if;
-  if r.active then
+  if r.active and r.role <> 'partenaire' then
     perform _caisse_of(r.id);
     -- La caisse suit l'agent s'il change d'agence.
     update accounts set name = 'Caisse ' || r.full_name, agence_id = r.agence_id where kind = 'caisse' and agent_id = r.id;
@@ -1935,8 +1960,8 @@ begin
   end if;
   update partenaires set name = nm, country = _txt(p,'country'), contacts = _txt(p,'contacts'), products = _txt(p,'products'),
     bank_details = _txt(p,'bank_details'), momo = _txt(p,'momo'), conditions = _txt(p,'conditions'),
-    payment_terms = _txt(p,'payment_terms'), note = _txt(p,'note'),
-    kind = case when _txt(p,'kind') in ('fournisseur','partenaire','les_deux') then _txt(p,'kind') else kind end,
+    payment_terms = _txt(p,'payment_terms'), note = _txt(p,'note'), whatsapp = _txt(p,'whatsapp'),
+    kind =case when _txt(p,'kind') in ('fournisseur','partenaire','les_deux') then _txt(p,'kind') else kind end,
     cartes_compensees = coalesce((p->>'cartes_compensees')::boolean, cartes_compensees),
     active = coalesce((p->>'active')::boolean, active)
   where id = r.id returning * into r;
@@ -1960,11 +1985,14 @@ begin
   me := _require(null);
   return (
     select coalesce(jsonb_agg(jsonb_build_object(
-      'id', x.id, 'name', x.name, 'kind', x.kind, 'country', x.country, 'products', x.products, 'active', x.active,
+      'id', x.id, 'name', x.name, 'kind', x.kind, 'country', x.country, 'products', x.products, 'active', x.active, 'whatsapp', x.whatsapp,
       'account_id', x.account_id, 'cards_account_id', x.cards_account_id, 'cartes_compensees', x.cartes_compensees,
       'position', _bal(x.account_id),
       'cards_position', case when x.cards_account_id is not null then _bal(x.cards_account_id) end,
       'pending_n', (select count(*) from partner_ops d where d.partenaire_id = x.id and d.status in ('en_attente','en_cours','partiel')),
+      'to_validate', (select count(*) from partner_ops d where d.partenaire_id = x.id and d.status in ('en_attente','en_cours','partiel')
+                        and exists (select 1 from jsonb_array_elements(coalesce(d.info->'reponses', '[]')) r
+                                    where coalesce(r->>'etat', '') = '')),
       'last_at', (select max(created_at) from partner_ops d where d.partenaire_id = x.id)
     ) order by x.active desc, x.name), '[]')
     from partenaires x
@@ -2341,8 +2369,19 @@ begin
   elsif act = 'reference' then
     update partner_ops set reference = coalesce(_txt(p,'reference'), reference), details = coalesce(_txt(p,'details'), details) where id = d.id;
 
+  elsif act = 'rejeter_reponse' then
+    -- Réponse du partenaire refusée (preuve insuffisante, erreur…) : aucun effet sur les soldes.
+    if _num(p,'reply_index') is null then raise exception 'Réponse introuvable.'; end if;
+    update partner_ops set info = jsonb_set(jsonb_set(info, array['reponses', _num(p,'reply_index')::int::text, 'etat'], '"rejete"'::jsonb),
+                                            array['reponses', _num(p,'reply_index')::int::text, 'motif'], to_jsonb(coalesce(_txt(p,'reason'), '')))
+    where id = d.id;
+
   else
     raise exception 'Action inconnue.';
+  end if;
+  -- Validation d'une réponse du partenaire : l'effet vient d'être enregistré par l'action ci-dessus.
+  if _num(p,'reply_index') is not null and act <> 'rejeter_reponse' then
+    update partner_ops set info = jsonb_set(info, array['reponses', _num(p,'reply_index')::int::text, 'etat'], '"valide"'::jsonb) where id = d.id;
   end if;
 
   update partner_ops set updated_at = now() where id = d.id;
@@ -2363,7 +2402,7 @@ begin
   if not canp and (d.type not in ('recharge','paiement','transfert_in','transfert_out') or (me.role <> 'gerante' and d.agence_id is distinct from me.agence_id)) then
     raise exception 'Accès refusé.';
   end if;
-  return _pop_row(d, canp);
+  return _pop_row(d, canp or d.created_by = me.id);
 end $$;
 
 -- Relevé : solde initial, mouvements confirmés, solde final (périmètre : financier ou cartes).
@@ -2372,7 +2411,12 @@ language plpgsql security definer set search_path = public as $$
 declare me profiles; pa partenaires; acc bigint; d1 date := coalesce(_txt(p,'from')::date, date '2000-01-01'); d2 date := coalesce(_txt(p,'to')::date, current_date);
         ouv numeric;
 begin
-  me := _require_perm('fournisseurs');
+  me := _require('any');
+  if me.role = 'partenaire' then
+    if me.partenaire_id is distinct from _num(p,'id')::bigint then raise exception 'Accès refusé.'; end if;
+  elsif not _can(me, 'fournisseurs') then
+    raise exception 'Vous n''avez pas ce droit (fournisseurs). Demandez à la direction.';
+  end if;
   pa := _part(_num(p,'id')::bigint);
   acc := case when _txt(p,'scope') = 'cartes' then _part_cards(pa) else pa.account_id end;
   ouv := (select coalesce(sum(m.amount), 0) from movements m join operations o on o.id = m.operation_id
@@ -2449,9 +2493,10 @@ create or replace function add_piece(p jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare me profiles; d partner_ops; pid bigint;
 begin
-  me := _require(null);
+  me := _require('any');
   select * into d from partner_ops where id = _num(p,'partner_op_id')::bigint;
   if d.id is null then raise exception 'Dossier introuvable.'; end if;
+  if me.role = 'partenaire' and d.partenaire_id is distinct from me.partenaire_id then raise exception 'Accès refusé.'; end if;
   if _txt(p,'data') is null or length(p->>'data') > 4000000 then raise exception 'Fichier vide ou trop lourd (3 Mo maximum).'; end if;
   insert into pieces(user_id, partner_op_id, name, mime, data) values (me.id, d.id, _txt(p,'name'), _txt(p,'mime'), p->>'data') returning id into pid;
   return jsonb_build_object('ok', true, 'id', pid);
@@ -2461,9 +2506,12 @@ create or replace function get_piece(p jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare me profiles; r pieces;
 begin
-  me := _require(null);
+  me := _require('any');
   select * into r from pieces where id = _num(p,'id')::bigint;
   if r.id is null then raise exception 'Pièce introuvable.'; end if;
+  if me.role = 'partenaire' and not exists (select 1 from partner_ops d where d.id = r.partner_op_id and d.partenaire_id = me.partenaire_id) then
+    raise exception 'Accès refusé.';
+  end if;
   return jsonb_build_object('id', r.id, 'name', r.name, 'mime', r.mime, 'data', r.data);
 end $$;
 
@@ -2660,6 +2708,88 @@ begin
     'clients', (select coalesce(jsonb_agg(x order by (x->>'days_late')::int desc, (x->>'dette')::numeric desc), '[]') from jsonb_array_elements(res) x));
 end $$;
 
+-- ---------- Espace partenaire (comptes de rôle « partenaire ») ----------------
+
+-- Ce que le partenaire voit d'un dossier : jamais les caisses, clients en détail ou autres partenaires.
+create or replace function _portal_row(d partner_ops) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('id', d.id, 'ref', d.ref, 'type', d.type, 'label', _pop_label(d.type), 'status', d.status,
+    'created_at', d.created_at, 'updated_at', d.updated_at,
+    'client', coalesce((select name from clients where id = d.client_id), d.client_name), 'donneur', d.donneur,
+    'beneficiary', d.beneficiary, 'beneficiary_phone', d.beneficiary_phone, 'service', d.service, 'card_ref', d.card_ref,
+    'amount', d.amount, 'due_partner', d.due_partner, 'to_recover', d.to_recover, 'invoice_ref', d.invoice_ref,
+    'lines', case when d.type = 'appro' then (select coalesce(jsonb_agg(l || jsonb_build_object('account', (select name from accounts where id = (l->>'account_id')::bigint),
+                                                 'bank', (select bank from accounts where id = (l->>'account_id')::bigint))), '[]') from jsonb_array_elements(d.lines) l)
+                  when d.type = 'cartes' then (select coalesce(jsonb_agg(l || jsonb_build_object('card_type', (select name from card_types where id = (l->>'card_type_id')::bigint))), '[]')
+                                               from jsonb_array_elements(d.lines) l)
+                  else d.lines end,
+    'alimente', (select coalesce(sum(amount), 0) from operations where partner_op_id = d.id and status = 'ok' and stage = 'alimentation'),
+    'reference', d.reference, 'details', d.details,
+    'reponses', coalesce(d.info->'reponses', '[]'),
+    'pieces', (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'name', name, 'created_at', created_at) order by id), '[]') from pieces where partner_op_id = d.id))
+$$;
+
+-- Tableau de bord du partenaire : sa position, les demandes à traiter, l'historique.
+create or replace function partner_portal(p jsonb default '{}') returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me profiles; pa partenaires; pos numeric;
+begin
+  me := _require('partenaire');
+  pa := _part(me.partenaire_id);
+  pos := _bal(pa.account_id);
+  return jsonb_build_object(
+    'partenaire', pa.name, 'partenaire_id', pa.id, 'company', (select value->>'name' from settings where key = 'company'),
+    -- Vu du partenaire : solde positif chez AYAEL = « vous devez à AYAEL ».
+    'position', pos, 'cards_position', case when pa.cards_account_id is not null and not pa.cartes_compensees then _bal(pa.cards_account_id) end,
+    'seen_at', me.seen_at,
+    'pending', (select coalesce(jsonb_agg(_portal_row(d) order by d.created_at), '[]') from partner_ops d
+                where d.partenaire_id = pa.id and d.status in ('en_attente','en_cours','partiel') and d.type not in ('virement','ouverture')),
+    'recent', (select coalesce(jsonb_agg(_portal_row(d) order by d.created_at desc), '[]') from (
+                select * from partner_ops d where d.partenaire_id = pa.id
+                  and (d.status not in ('en_attente','en_cours','partiel') or d.type in ('virement','ouverture'))
+                order by d.created_at desc limit 60) d));
+end $$;
+
+-- Le partenaire a vu ses demandes (pour le badge « nouvelles »).
+create or replace function partner_seen(p jsonb default '{}') returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me profiles;
+begin
+  me := _require('partenaire');
+  update profiles set seen_at = now() where id = me.id;
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- Réponse du partenaire à une demande : « fait » ou « échoué », avec référence.
+-- Elle n'a AUCUN effet sur les soldes tant qu'AYAEL ne l'a pas validée.
+create or replace function partner_reply(p jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me profiles; d partner_ops; rep text := _txt(p,'reponse'); a accounts;
+begin
+  me := _require('partenaire');
+  select * into d from partner_ops where id = _num(p,'dossier_id')::bigint for update;
+  if d.id is null or d.partenaire_id is distinct from me.partenaire_id then raise exception 'Demande introuvable.'; end if;
+  if d.status not in ('en_attente','en_cours','partiel') then raise exception 'Cette demande est déjà clôturée.'; end if;
+  if rep not in ('fait','echoue') then raise exception 'Réponse invalide.'; end if;
+  if rep = 'fait' and d.type = 'appro' then
+    select * into a from accounts where id = _num(p,'account_id')::bigint;
+    if a.id is null or not exists (select 1 from jsonb_array_elements(d.lines) l where (l->>'account_id')::bigint = a.id) then
+      raise exception 'Choisissez le compte alimenté.';
+    end if;
+    if coalesce(_num(p,'amount'), 0) <= 0 then raise exception 'Indiquez le montant alimenté.'; end if;
+  end if;
+  if rep = 'fait' and _txt(p,'reference') is null then raise exception 'Indiquez la référence de l''opération (preuve).'; end if;
+  update partner_ops set
+    info = jsonb_set(info, '{reponses}', coalesce(info->'reponses', '[]') || jsonb_build_array(jsonb_build_object(
+      'reponse', rep, 'at', now(), 'by', me.full_name, 'reference', _txt(p,'reference'), 'note', _txt(p,'note'),
+      'amount', coalesce(_num(p,'amount'), case when d.type in ('recharge','transfert_out') then coalesce(d.due_partner, d.amount) else d.amount end),
+      'account_id', a.id, 'account', a.name, 'etat', ''))),
+    status = case when status = 'en_attente' then 'en_cours' else status end, updated_at = now()
+  where id = d.id returning * into d;
+  perform _log('partenaires');
+  return jsonb_build_object('ok', true, 'dossier', _portal_row(d));
+end $$;
+
 -- ---------- Données de départ (uniquement si les tables sont vides) ---------
 
 do $$
@@ -2763,7 +2893,7 @@ begin
                'list_dossiers','create_dossier','dossier_action','get_dossier','releve_partenaire','save_card_type','list_stock',
                'stock_adjust','add_piece','get_piece',
                '_client_pos','_client_credit_state','_credit_check','_credit_create','save_client_credit','op_reglement','op_client_ajust',
-               'client_account','credit_overview')
+               'client_account','credit_overview','_portal_row','partner_portal','partner_seen','partner_reply')
     loop
       execute format('revoke execute on function %s from public, anon', f.sig);
       if left(f.proname, 1) = '_' or f.proname = 'handle_new_user' then

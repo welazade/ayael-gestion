@@ -295,6 +295,13 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .releve .sub { color: #777; font-size: 8pt; }
 .releve .fin { margin-top: 5mm; font-size: 12pt; color: #111; }
 
+/* ---------- Espace partenaire ---------- */
+.pcard { margin-bottom: 10px; }
+.pc-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.pc-big { font-size: 16px; margin-bottom: 4px; }
+.pc-ref { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 18px; letter-spacing: .06em; font-weight: 650; }
+.pc-acts { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
 /* ---------- Clients : fidélité et compte ---------- */
 .clrow { display: flex; align-items: center; gap: 8px; }
 .rowbtn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; background: none; border: 0; padding: 0; margin: 0;

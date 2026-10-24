@@ -1,6 +1,6 @@
 // Service worker : permet l'installation sur le téléphone et un démarrage rapide.
 // Les données passent toujours par Internet (rien n'est enregistré hors ligne).
-const VERSION = 'ayael-v14';
+const VERSION = 'ayael-v15';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/logo.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png'];
 

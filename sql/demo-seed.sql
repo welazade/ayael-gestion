@@ -82,7 +82,7 @@ select op_approvisionnement(jsonb_build_object('gtp_id', (select id from account
 -- Partenaire en Côte d'Ivoire : l'exemple du cahier des charges (il doit 400 000 F à AYAEL).
 select save_partenaire('{"name":"Partenaire CI (démo)","kind":"les_deux","country":"Côte d''Ivoire","contacts":"M. Koné · +225 07 00 00 00",
   "products":"Cartes physiques, alimentation UBA / GTCO, recharges Ecobank et BNI, paiements de bénéficiaires, Wave / Orange Money / MTN",
-  "conditions":"Frais Ecobank / BNI : 1 % du montant","payment_terms":"Compensation chaque fin de semaine","cartes_compensees":false}');
+  "conditions":"Frais Ecobank / BNI : 1 % du montant","payment_terms":"Compensation chaque fin de semaine","cartes_compensees":false,"whatsapp":"+225 07 00 00 00"}');
 select op_ajustement(jsonb_build_object('account_id', (select id from accounts where name = 'Coffre'), 'target', 3000000, 'details', 'Coffre (démo)'));
 select create_dossier(jsonb_build_object('partenaire_id', (select id from partenaires where name = 'Partenaire CI (démo)'), 'type', 'paiement',
   'beneficiary', 'KOFFI AMAVI', 'beneficiary_phone', '90 55 44 33', 'amount', 2000000, 'details', 'Demande du partenaire (démo)'));
@@ -120,5 +120,13 @@ select create_dossier(jsonb_build_object('partenaire_id', (select id from parten
     jsonb_build_object('card_type_id', (select id from card_types where name = 'Carte GTCO Visa'), 'qty', 20, 'unit_price', 4000))));
 select dossier_action(jsonb_build_object('dossier_id', (select max(id) from partner_ops), 'action', 'reception',
   'lines', jsonb_build_array(jsonb_build_object('card_type_id', (select id from card_types where name = 'Carte UBA AfricSika'), 'qty', 30))));
+
+-- Compte de connexion du partenaire CI : il ne voit que son espace.
+select set_config('app.uid', '00000000-0000-0000-0000-000000000001', false);
+insert into auth.users(id, email, raw_user_meta_data) values
+  ('00000000-0000-0000-0000-000000000007', 'partenaire.ci@ayael.app', '{"full_name":"M. Koné (partenaire CI)"}')
+on conflict do nothing;
+select save_profile(jsonb_build_object('id', '00000000-0000-0000-0000-000000000007', 'role', 'partenaire', 'active', true,
+  'partenaire_id', (select id from partenaires where name = 'Partenaire CI (démo)')));
 
 select set_config('app.uid', '', false);
