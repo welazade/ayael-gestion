@@ -101,6 +101,16 @@ select dossier_action(jsonb_build_object('dossier_id', (select max(id) from part
 select create_dossier(jsonb_build_object('partenaire_id', (select id from partenaires where name = 'Partenaire CI (démo)'), 'type', 'recharge',
   'client_id', (select id from clients where name = 'YASMINE DAOUDA'), 'service', 'Ecobank', 'card_ref', '5199000077771234',
   'amount', 50000, 'billed', 51000, 'encaisse', 51000));
+-- Crédits clients : CHARIFE ISSAKA autorisé (plafond 150 000 F, 15 jours) ; l'exemple du cahier des charges.
+select save_client_credit(jsonb_build_object('client_id', (select id from clients where name = 'CHARIFE ISSAKA'),
+  'credit_allowed', true, 'credit_limit', 150000, 'credit_days', 15));
+select op_vente(jsonb_build_object('client_id', (select id from clients where name = 'CHARIFE ISSAKA'), 'credit_amount', 50000,
+  'lines', jsonb_build_array(jsonb_build_object('type', 'recharge', 'card_id', (select id from cards where card_number = '5027658'),
+                             'gtp_id', (select id from accounts where name = 'GTCO principal'), 'amount', 50000)), 'force_duplicate', true));
+update client_credits set created_at = now() - interval '20 days', due_date = current_date - 5 where id = (select max(id) from client_credits);
+select op_vente(jsonb_build_object('client_id', (select id from clients where name = 'CHARIFE ISSAKA'), 'credit_amount', 30000,
+  'lines', jsonb_build_array(jsonb_build_object('type', 'caisse', 'product_id', (select id from products where name = 'Crédit de communication'), 'amount', 30000, 'details', 'Moov'))));
+select op_reglement(jsonb_build_object('client_id', (select id from clients where name = 'CHARIFE ISSAKA'), 'amount', 60000, 'reference', 'Espèces (démo)'));
 -- Cartes physiques : deux types, une commande reçue en partie.
 select save_card_type('{"name":"Carte UBA AfricSika","bank":"UBA","sale_price":5000}');
 select save_card_type('{"name":"Carte GTCO Visa","bank":"GTCO","sale_price":6000}');

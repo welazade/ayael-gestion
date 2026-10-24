@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '15';
+  const DEMO_SCHEMA_VERSION = '16';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -105,6 +105,7 @@
   // Niveau de fidélité selon les points (1 point par passage en caisse).
   const LEVELS = [[50, 'Or', 'gold'], [20, 'Argent', 'silver'], [5, 'Bronze', 'bronze']];
   const level = pts => LEVELS.find(l => Number(pts) >= l[0]) || null;
+  const clientPosLine = pos => { pos = Number(pos) || 0; return pos > 0 ? `Ce client nous doit : ${fmt(pos)}` : pos < 0 ? `Avance disponible : ${fmt(-pos)}` : 'Compte client à jour'; };
   const levelTag = pts => { const l = level(pts); return l ? `<span class="tag lvl ${l[2]}">${l[1]}</span>` : ''; };
   const ACCOUNT_KIND = { gtp: 'Compte GTP', electronique: 'Compte électronique', caisse: 'Caisse d’agent', coffre: 'Coffre', banque: 'Banque', fournisseur: 'Fournisseur', avoir: 'Monnaie des clients' };
   const DEP_CATS = ['Transport', 'Repas', 'Fournitures', 'Électricité / eau', 'Loyer', 'Salaire / avance', 'Autre'];
@@ -543,17 +544,17 @@
   function navItems() {
     if (isDir()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
       ['commissions', 'Commissions à vérifier', 'card'], ['fournisseurs', 'Partenaires', 'truck'], ['dossiers', 'Opérations partenaires', 'swap'],
-      ['stock', 'Stock de cartes', 'tag'], ['rapports', 'Rapports', 'chart'], 'Réglages',
+      ['credits', 'Crédits clients', 'receipt'], ['stock', 'Stock de cartes', 'tag'], ['rapports', 'Rapports', 'chart'], 'Réglages',
       ['agences', 'Agences', 'bank'], ['equipe', 'Équipe', 'user'], ['comptes', 'Comptes et commissions', 'bank'], ['produits', 'Produits de caisse', 'tag'],
       ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'], ['import', 'Importer depuis Excel', 'upload'], ['plus', 'Autres réglages', 'grid']];
     if (isMgr()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'],
       ...(can('clotures') ? [['clotures', 'Clôtures', 'lock']] : []), ['commissions', 'Commissions à vérifier', 'card'],
-      ...(can('fournisseurs') ? [['fournisseurs', 'Partenaires', 'truck']] : []), ['dossiers', 'Opérations partenaires', 'swap'], ['stock', 'Stock de cartes', 'tag'],
+      ...(can('fournisseurs') ? [['fournisseurs', 'Partenaires', 'truck']] : []), ['dossiers', 'Opérations partenaires', 'swap'], ['credits', 'Crédits clients', 'receipt'], ['stock', 'Stock de cartes', 'tag'],
       ...(can('clotures') ? [['rapports', 'Rapports', 'chart']] : []),
       ...(can('produits') ? [['produits', 'Produits de caisse', 'tag']] : []), ['cartes', 'Cartes clients', 'card'], ['plus', 'Plus', 'grid']];
     return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'],
       ...(S.me.can_recharge ? [['commissions', 'Commissions à vérifier', 'card']] : []),
-      ...(S.me.can_caisse ? [['dossiers', 'Opérations partenaires', 'swap']] : []), ['cloture', 'Clôture du soir', 'lock']];
+      ...(S.me.can_caisse ? [['dossiers', 'Opérations partenaires', 'swap']] : []), ['credits', 'Crédits clients', 'receipt'], ['cloture', 'Clôture du soir', 'lock']];
   }
   const firstView = () => isMgr() ? 'tableau' : 'accueil';
 
@@ -683,6 +684,11 @@
         break;
       }
       case 'avoir': {
+        if (o.category === 'credit' || o.category === 'reglement') {
+          const rg = o.category === 'reglement';
+          Object.assign(r, { ico: rg ? 'in' : 'out', sym: icon('receipt'), title: (rg ? 'Règlement' : 'Vente à crédit') + (o.client_name ? ' · ' + o.client_name : ''), sign: rg ? 1 : (o.account_kind === 'avoir' ? 0 : -1), sub: o.details || '' });
+          break;
+        }
         const inn = o.category === 'garde' || o.category === 'depot';
         const t = { garde: 'Monnaie gardée', depot: 'Dépôt sur compte client', utilise: 'Payé avec la monnaie du client', rendu: 'Monnaie rendue' }[o.category] || 'Monnaie client';
         Object.assign(r, { ico: inn ? 'in' : 'out', sym: icon('user'), title: `${t}${o.client_name ? ' · ' + o.client_name : ''}`, sign: inn ? 1 : -1,
@@ -820,7 +826,7 @@
         const cl = st.client;
         box.innerHTML = `<div class="clientcard"><div class="ico rc">${esc(initials(cl.name))}</div>
           <div class="main"><div class="t">${esc(cl.name)} ${levelTag(cl.points)}</div><div class="s">${esc([cl.phone, activeCards(cl).length ? activeCards(cl).length + ' carte(s) active(s)' : 'aucune carte active',
-            cl.points ? cl.points + ' point(s)' : ''].filter(Boolean).join(' · '))}${Number(cl.avoir) > 0 ? ` · <b class="pos">solde ${fmt(cl.avoir)}</b>` : ''}</div></div>
+            cl.points ? cl.points + ' point(s)' : ''].filter(Boolean).join(' · '))}${Number(cl.avoir) > 0 ? ` · <b class="pos">avance ${fmt(cl.avoir)}</b>` : Number(cl.avoir) < 0 ? ` · <b class="neg">doit ${fmt(-cl.avoir)}</b>` : ''}${cl.credit_allowed ? ' · crédit autorisé' : ''}</div></div>
           <button class="btn small" type="button" id="vchg">Changer</button></div>`;
         $('#vchg').onclick = () => { st.client = null; drawClient(); drawFields(); $('#vcq').focus(); };
         return;
@@ -843,7 +849,7 @@
         const res = await rpc('search_clients', { q, limit: 8 });
         if (inp.value.trim() !== q) return;
         res.forEach(x => S.clients.set(x.id, x));
-        opts = res.map(x => ({ t: esc(x.name) + (Number(x.avoir) > 0 ? ` <span class="tag green">solde ${fmt(x.avoir)}</span>` : '') + ' ' + levelTag(x.points),
+        opts = res.map(x => ({ t: esc(x.name) + (Number(x.avoir) > 0 ? ` <span class="tag green">avance ${fmt(x.avoir)}</span>` : Number(x.avoir) < 0 ? ` <span class="tag red">doit ${fmt(-x.avoir)}</span>` : '') + ' ' + levelTag(x.points),
           s: esc([x.phone, ...activeCards(x).map(k => `${k.bank} ${k.card_number}`)].filter(Boolean).join(' · ')) || 'pas de carte active',
           go: () => { st.client = x; st.passName = ''; drawClient(); drawFields(); $('#vprod').focus(); } }));
         opts.push({ t: `＋ Créer le client « ${esc(q.toUpperCase())} »`, s: 'Nouvelle fiche client (nom, téléphone)',
@@ -969,10 +975,20 @@
       $('#vtot').innerHTML = st.lines.length ? `<div class="vtotal"><span>${t >= 0 ? 'Total à payer' : 'Total à remettre au client'}</span><span class="num">${fmt(Math.abs(t))}</span></div>` : '';
       const showPay = st.lines.some(l => l.sign > 0) && t > 0;
       const solde = st.client ? Number(st.client.avoir) || 0 : 0;
+      const crOk = !!(st.client && st.client.credit_allowed);
+      const dette = st.client ? Math.max(-(Number(st.client.avoir) || 0), 0) : 0;
+      const dueDef = (() => { const x = new Date(); x.setDate(x.getDate() + (Number(st.client && st.client.credit_days) || 30)); return isoDay(x); })();
+      st.crMode = crOk ? (st.crMode || 'full') : 'full';
       $('#vpay').innerHTML = showPay ? `
+        ${crOk ? `<div class="avbox"><div class="field" style="margin:0"><span>Paiement</span><div class="chips wrap">
+            ${[['full', 'Payé maintenant'], ['part', 'Partiel (reste à crédit)'], ['credit', 'Tout à crédit']].map(([k, l]) => `<button type="button" class="chip ${st.crMode === k ? 'on' : ''}" data-chip="vmode" data-v="${k}">${l}</button>`).join('')}</div></div>
+          <div id="vcrf" class="${st.crMode === 'full' ? 'hidden' : ''}"><div class="grid2">
+            <div id="vcrpart" class="${st.crMode === 'part' ? '' : 'hidden'}">${field('Montant à crédit', moneyInput('vcr', st.crAmt ? `value="${fmtN(st.crAmt)}"` : ''))}</div>
+            ${field('Échéance', `<input class="input" type="date" name="vcrdue" value="${esc(st.crDue || dueDef)}">`)}</div></div>
+          <div class="small muted" id="vcrinfo">Doit déjà ${fmt(dette)} · plafond ${fmt(st.client.credit_limit)} · disponible ${fmt(Math.max(Number(st.client.credit_limit) - dette, 0))}</div></div>` : ''}
         <div class="field"><span>Payé en</span><div class="chips wrap">${pays.map(p => `<button type="button" class="chip ${p[0] === st.pay ? 'on' : ''}" data-chip="vpay" data-v="${p[0]}">${esc(p[1])}</button>`).join('')}</div></div>
         <div class="${st.pay === S.me.caisse_id ? '' : 'hidden'}" id="vcash">
-          ${solde > 0 ? `<div class="avbox"><label class="check"><input type="checkbox" id="vavon"> Utiliser sa monnaie (solde ${fmt(solde)})</label>
+          ${solde > 0 ? `<div class="avbox"><label class="check"><input type="checkbox" id="vavon"> Utiliser son avance (${fmt(solde)})</label>
             <div class="hidden" id="vavf">${field('Montant pris sur son compte', moneyInput('vavu'))}</div></div>` : ''}
           <div id="vdue" class="small muted" style="margin:-4px 0 10px"></div>
           <div class="grid2">${field('Reçu du client', moneyInput('vrec'))}
@@ -982,13 +998,21 @@
         </div>` : '';
       if (showPay) {
         bindMoney($('#vpay'));
-        chipGroup(c, 'vpay', v => { st.pay = Number(v); $('#vcash').classList.toggle('hidden', st.pay !== S.me.caisse_id); });
+        chipGroup(c, 'vpay', v => { st.pay = Number(v); $('#vcash').classList.toggle('hidden', st.pay !== S.me.caisse_id); upd(); });
+        chipGroup(c, 'vmode', v => { st.crMode = v; $('#vcrf').classList.toggle('hidden', v === 'full'); $('#vcrpart').classList.toggle('hidden', v !== 'part'); upd(); });
         const r = $('[name=vrec]'), avOn = $('#vavon'), avU = $('[name=vavu]'), kOn = $('#vkeep'), kAmt = $('[name=vkeepamt]');
+        c.qa('[name=vcr],[name=vcrdue]').forEach(i => i.addEventListener('input', () => upd()));
         let keepEdited = false;
         const upd = () => {
-          const u = avOn && avOn.checked ? Math.min(parseAmt(avU.value) || 0, solde, t) : 0;
-          const due = t - u;
-          $('#vdue').innerHTML = u ? `Pris sur son compte : <b>${fmt(u)}</b> · reste à payer : <b>${fmt(due)}</b>` : '';
+          const cashOn = st.pay === S.me.caisse_id;
+          const u = cashOn && avOn && avOn.checked ? Math.min(parseAmt(avU.value) || 0, solde, t) : 0;
+          const cr = st.crMode === 'credit' ? t - u : st.crMode === 'part' ? Math.min(Math.max(parseAmt(($('[name=vcr]') || {}).value) || 0, 0), t - u) : 0;
+          const due = t - u - cr;
+          st.crAmt = cr; st.crDue = ($('[name=vcrdue]') || {}).value || null;
+          const ci = $('#vcrinfo');
+          if (ci) { const after = dette + cr, lim = Number(st.client.credit_limit) || 0;
+            ci.innerHTML = `Doit déjà ${fmt(dette)} · plafond ${fmt(lim)}${cr ? ` · après cette vente : <b class="${after > lim ? 'neg' : ''}">${fmt(after)}</b>${after > lim ? ' (plafond dépassé : accord d’un responsable)' : ''}` : ` · disponible ${fmt(Math.max(lim - dette, 0))}`}`; }
+          $('#vdue').innerHTML = [u ? `Pris sur son compte : <b>${fmt(u)}</b>` : '', cr ? `À crédit : <b>${fmt(cr)}</b>` : '', u || cr ? `reste à payer maintenant : <b>${fmt(due)}</b>` : ''].filter(Boolean).join(' · ');
           const v = parseAmt(r.value), ch = $('#vchange');
           const change = v == null ? null : v - due;
           const kb = $('#vkeepbox');
@@ -1009,7 +1033,7 @@
         r.addEventListener('input', upd);
         r.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('[data-x=ok]').click(); } });
         upd();
-      } else { st.avUse = 0; st.avKeep = 0; }
+      } else { st.avUse = 0; st.avKeep = 0; st.crAmt = 0; }
     }
 
     $('#vprod').onchange = e => { st.sel = e.target.value; drawFields(); };
@@ -1020,22 +1044,31 @@
       const cash = st.pay === S.me.caisse_id;
       const rec = $('[name=vrec]') && cash ? parseAmt($('[name=vrec]').value) : null;
       const u = cash ? st.avUse || 0 : 0, k = cash && rec != null ? st.avKeep || 0 : 0;
-      if (rec != null && t > 0 && rec < t - u) throw new Error(`Le client a donné ${fmt(rec)} : il manque ${fmt(t - u - rec)}.`);
+      const cr = st.client && st.client.credit_allowed && t > 0 ? st.crAmt || 0 : 0;
+      if (st.crMode === 'part' && !cr) throw new Error('Indiquez le montant à crédit (ou choisissez « Payé maintenant »).');
+      if (rec != null && t > 0 && rec < t - u - cr) throw new Error(`Le client a donné ${fmt(rec)} : il manque ${fmt(t - u - cr - rec)}.`);
       const payload = { client_id: st.client ? st.client.id : null, client_name: st.client ? null : (st.passName || null),
-        pay_account_id: st.pay, received: rec, avoir_use: u, avoir_keep: k,
+        pay_account_id: st.pay, received: rec, avoir_use: u, avoir_keep: k, credit_amount: cr, credit_due: cr ? st.crDue : null,
         lines: st.lines.map(l => l.type === 'recharge'
           ? { type: 'recharge', card_id: l.card_id, gtp_id: l.gtp_id, amount: l.amount, commission: l.commission }
           : { type: 'caisse', product_id: l.product_id, amount: l.amount, details: l.details, counter_account_id: l.counter_account_id, qty: l.qty }) };
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 4; i++) {
         const r = await rpc('op_vente', payload);
         if (r.ok) {
           const client = st.client;
           if (client) { if (r.avoir != null) client.avoir = r.avoir; client.points = (Number(client.points) || 0) + 1; client.last_at = new Date().toISOString(); }
           c.close();
-          toast(`Opération enregistrée : ${fmt(Math.abs(r.total))}.${(u || k) && r.avoir != null ? ` Solde du client : ${fmt(r.avoir)}.` : ''}`, 'ok');
+          toast(`Opération enregistrée : ${fmt(Math.abs(r.total))}.${(u || k || cr) && r.position != null ? ' ' + clientPosLine(r.position) + '.' : ''}`, 'ok');
           refreshNow();
           sheetReceipt(r.receipt_id, { client });
           return;
+        }
+        const lim = r.warnings.filter(w => w.type === 'credit_limit');
+        if (lim.length) {
+          if (!r.can_force_credit) throw new Error(lim[0].message + ' Demandez l’accord d’un responsable.');
+          if (!await ask('Plafond de crédit dépassé', `<p>${esc(lim[0].message)}</p><p>Autoriser quand même cette vente à crédit ?</p>`, 'Oui, j’autorise', true)) return;
+          payload.force_credit = true;
+          continue;
         }
         const dups = r.warnings.filter(w => w.type === 'duplicate'), ins = r.warnings.filter(w => w.type === 'insufficient');
         if (ins.length) {
@@ -1087,7 +1120,8 @@
       ${Number(r.avoir_used) ? `<div class="l"><span>Pris sur son compte</span><span>${fmt(r.avoir_used)}</span></div>` : ''}
       ${r.received != null && tot > 0 ? `<div class="l"><span>Reçu</span><span>${fmt(r.received)}</span></div><div class="l"><span>Rendu</span><span>${fmt(r.change_given)}</span></div>` : ''}
       ${Number(r.avoir_kept) ? `<div class="l"><span>Gardé sur son compte</span><span>${fmt(r.avoir_kept)}</span></div>` : ''}
-      ${r.client_avoir != null && (Number(r.client_avoir) || Number(r.avoir_used) || Number(r.avoir_kept)) ? `<div class="l"><span>Solde du client</span><span>${fmt(r.client_avoir)}</span></div>` : ''}
+      ${Number(r.credit_amount) ? `<div class="l"><span>À crédit (échéance ${fmtDate(r.credit_due)})</span><span>${fmt(r.credit_amount)}</span></div>` : ''}
+      ${r.client_position != null && (Number(r.client_position) || Number(r.avoir_used) || Number(r.avoir_kept) || Number(r.credit_amount)) ? `<div class="c" style="margin-top:4px">${esc(clientPosLine(r.client_position))}</div>` : ''}
       <hr>${co.footer ? `<div class="c">${esc(co.footer)}</div>` : ''}`;
   }
   function printReceipt(r) {
@@ -1215,7 +1249,8 @@
       <div class="bd-words">${esc(enLettres(tot))}</div>
       ${tot > 0 ? `<div class="bd-block bd-pay">${kv('Payé en', esc(payName || ''))}${Number(r.avoir_used) ? kv('Pris sur son compte', fmtN(r.avoir_used)) : ''}
         ${r.received != null ? kv('Reçu', fmtN(r.received)) + kv('Rendu', fmtN(r.change_given)) : ''}${Number(r.avoir_kept) ? kv('Gardé sur son compte', fmtN(r.avoir_kept)) : ''}
-        ${r.client_avoir != null && (Number(r.client_avoir) || Number(r.avoir_used) || Number(r.avoir_kept)) ? kv('Solde du client', fmtN(r.client_avoir) + ' FCFA') : ''}</div>` : ''}
+        ${Number(r.credit_amount) ? kv('À crédit · échéance ' + fmtDate(r.credit_due), fmtN(r.credit_amount)) : ''}
+        ${r.client_position != null && (Number(r.client_position) || Number(r.avoir_used) || Number(r.avoir_kept) || Number(r.credit_amount)) ? kv('Compte client', esc(clientPosLine(r.client_position))) : ''}</div>` : ''}
       <div class="bd-sign"><div><span></span>Signature du client</div><div><span></span>Caissier · ${esc(r.agent || '')}</div></div>
       <div class="bd-foot">${co.footer ? `<div class="bd-thanks">${esc(co.footer)}</div>` : ''}
         ${info.length ? `<div>${esc(co.name)} — ${esc(info.join(' · '))}</div>` : ''}</div>
@@ -1297,7 +1332,7 @@
           const wa = f.sort === 'idle' && waLink(x.phone, `Bonjour ${x.name}, ici ${co.name}. Cela fait un moment ! Nous serons ravis de vous revoir pour vos recharges et transferts.`);
           return `<div class="row clrow"><button class="rowbtn" data-client="${x.id}">
             <div class="ico rc">${esc(initials(x.name))}</div>
-            <div class="main"><div class="t">${esc(x.name)} ${levelTag(x.points)}${Number(x.avoir) > 0 ? ` <span class="tag green">solde ${fmt(x.avoir)}</span>` : ''}</div>
+            <div class="main"><div class="t">${esc(x.name)} ${levelTag(x.points)}${Number(x.avoir) > 0 ? ` <span class="tag green">avance ${fmt(x.avoir)}</span>` : Number(x.avoir) < 0 ? ` <span class="tag red">doit ${fmt(-x.avoir)}</span>` : ''}</div>
               <div class="s">${esc([x.phone, x.points ? x.points + ' point(s)' : 'aucune visite', x.last_at ? 'dernière visite ' + ago(x.last_at) : '',
                 f.sort === 'auto' || f.sort === 'name' ? activeCards(x).map(k => `${k.bank} ${k.card_number}`).join(', ') : ''].filter(Boolean).join(' · '))}</div></div></button>
             ${wa ? `<a class="btn small" href="${esc(wa)}" target="_blank" rel="noopener">${icon('chat')} WhatsApp</a>` : icon('chev')}</div>`;
@@ -1308,6 +1343,117 @@
     const q = m.querySelector('#clq');
     q.addEventListener('input', debounce(() => { f.q = q.value.trim(); load(); }, 250));
     m.querySelector('#clnew').onclick = () => sheetClientEdit({ name: f.q }, saved => sheetClient(saved));
+    await load();
+  }
+
+  // ---------------------------------------------------------------- crédits clients
+  // Règlement : par défaut, affecté aux dettes les plus anciennes ; un responsable peut choisir les ventes.
+  function sheetReglement(cl, ca, then) {
+    const open = ca.credits.filter(x => x.remaining > 0);
+    sheet({
+      title: `Règlement · ${cl.name}`, wide: open.length > 0 && isMgr(),
+      body: `<div class="calc"><div style="font-weight:700">${esc(clientPosLine(ca.position))}</div>
+          <div class="small muted">${open.length} vente(s) à crédit non soldée(s)</div></div>
+        <div class="grid2">${field('Montant reçu', moneyInput('amount', `autofocus value="${ca.dette ? fmtN(ca.dette) : ''}"`))}
+          ${field('Date', `<input class="input" type="date" name="date" value="${todayIso()}" max="${todayIso()}">`)}</div>
+        <div class="grid2">${field('Encaissé sur (caisse ou compte)', `<select class="input" name="acc">${cashOpts()}</select>`)}
+          ${field('Référence', '<input class="input" name="reference" autocomplete="off" placeholder="N° de transaction, chèque…">')}</div>
+        <p class="small muted" id="rginfo" style="margin:-4px 0 10px"></p>
+        ${open.length && isMgr() ? `<div class="avbox"><label class="check"><input type="checkbox" name="manual"> Choisir les ventes réglées (sinon : les plus anciennes d’abord)</label>
+          <div id="rgman" class="hidden">${open.map(x => `<div class="grid2" style="align-items:end">${field(`${esc(x.label || 'Vente')} · ${fmtDate(isoDay(new Date(x.created_at)))} · reste ${fmt(x.remaining)}`, moneyInput('al' + x.id))}<div></div></div>`).join('')}</div></div>` : ''}`,
+      foot: '<button class="btn primary" data-x="ok">Enregistrer le règlement</button>',
+      onMount(c) {
+        const upd = () => { const a = parseAmt(c.q('[name=amount]').value) || 0; c.q('#rginfo').textContent = a > ca.dette && a ? `Le surplus de ${fmt(a - Math.max(ca.dette, 0))} deviendra une avance pour ses prochains achats.` : ''; };
+        c.q('[name=amount]').addEventListener('input', upd); upd();
+        const m = c.q('[name=manual]'); if (m) m.onchange = () => c.q('#rgman').classList.toggle('hidden', !m.checked);
+        c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          const p = { client_id: cl.id, amount: parseAmt(c.q('[name=amount]').value), date: c.q('[name=date]').value, account_id: Number(c.q('[name=acc]').value), reference: c.q('[name=reference]').value };
+          if (m && m.checked) p.allocations = open.map(x => ({ credit_id: x.id, amount: parseAmt(c.q(`[name=al${x.id}]`).value) || 0 })).filter(x => x.amount > 0);
+          const r = await rpc('op_reglement', p);
+          c.close(); toast(`Règlement enregistré. ${clientPosLine(r.position)}.`, 'ok'); refreshNow(); then && then();
+        });
+      },
+    });
+  }
+  function sheetCreditSettings(cl, ca, then) {
+    sheet({
+      title: `Crédit · ${cl.name}`,
+      body: `<label class="check"><input type="checkbox" name="ok" ${ca.credit_allowed ? 'checked' : ''}> Autorisé à acheter à crédit</label>
+        <div class="grid2">${field('Plafond de crédit', moneyInput('limit', `value="${fmtN(ca.credit_limit)}"`), 'Au-delà, la vente à crédit demande l’accord d’un responsable.')}
+          ${field('Délai de paiement (jours)', `<input class="input" name="days" inputmode="numeric" value="${ca.credit_days}">`)}</div>`,
+      foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
+      onMount(c) { c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+        await rpc('save_client_credit', { client_id: cl.id, credit_allowed: c.q('[name=ok]').checked, credit_limit: parseAmt(c.q('[name=limit]').value) || 0, credit_days: parseInt(c.q('[name=days]').value) || 0 });
+        c.close(); toast('Réglages du crédit enregistrés.', 'ok'); then && then(); }); },
+    });
+  }
+  function sheetClientAjust(cl, then) {
+    sheet({
+      title: `Correction · ${cl.name}`,
+      body: `<div class="alert warn">Une correction modifie la dette du client sans vente ni paiement. Elle reste tracée avec son motif.</div>
+        <div class="field"><span>Sens</span><div class="chips wrap"><button type="button" class="chip on" data-chip="s" data-v="1">Il nous doit plus</button><button type="button" class="chip" data-chip="s" data-v="-1">Il nous doit moins</button></div></div>
+        ${field('Montant', moneyInput('amount', 'autofocus'))}${field('Motif (obligatoire)', '<input class="input" name="reason" placeholder="ex. dette notée dans le cahier avant l’application">')}`,
+      foot: '<button class="btn primary" data-x="ok">Enregistrer la correction</button>',
+      onMount(c) { chipGroup(c, 's'); c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+        const r = await rpc('op_client_ajust', { client_id: cl.id, amount: (parseAmt(c.q('[name=amount]').value) || 0) * Number(chipVal(c, 's')), reason: c.q('[name=reason]').value });
+        c.close(); toast(`Correction enregistrée. ${clientPosLine(r.position)}.`, 'ok'); refreshNow(); then && then(); }); },
+    });
+  }
+  const CAT_LABEL = { credit: 'Vente à crédit', reglement: 'Règlement', garde: 'Monnaie gardée', depot: 'Dépôt (avance)', utilise: 'Avance utilisée', rendu: 'Avance rendue', client: 'Correction' };
+  async function exportClientReleve(cl, ca) {
+    await loadXLSX(); const XL = window.XLSX;
+    let run = 0;
+    const mv = ca.mouvements.slice().reverse().map(m => { run += Number(m.variation); return {
+      Date: fmtDate(m.op_day), Heure: fmtTime(m.created_at), 'Opération': CAT_LABEL[m.category] || m.kind, 'Détails': m.details || '',
+      'Il nous doit (+) / avance (−)': Number(m.variation), Solde: run, Statut: m.status === 'ok' ? '' : 'ANNULÉE', Agent: m.agent || '' }; });
+    const wb = XL.utils.book_new();
+    const ws = XL.utils.json_to_sheet([...mv, { Date: '', 'Opération': 'Solde final', 'Détails': clientPosLine(ca.position), Solde: Number(ca.position) }]);
+    ws['!cols'] = [11, 7, 18, 50, 16, 12, 10, 18].map(w => ({ wch: w }));
+    XL.utils.book_append_sheet(wb, ws, 'Relevé');
+    const ws2 = XL.utils.json_to_sheet(ca.credits.map(x => ({ Date: fmtDate(isoDay(new Date(x.created_at))), Vente: x.label, 'Montant': Number(x.amount), 'Payé': Number(x.paid),
+      'Reste': Number(x.remaining), 'Échéance': fmtDate(x.due_date), 'Retard (jours)': x.days_late || '', Statut: CR_STATUS[x.status][0] })));
+    XL.utils.book_append_sheet(wb, ws2, 'Ventes à crédit');
+    XL.writeFile(wb, `Releve client ${cl.name} ${todayIso()}.xlsx`.replace(/[\\/:*?"<>|]/g, '-'));
+  }
+
+  // Tableau des créances clients.
+  async function vCredits(m) {
+    const f = S.crf || (S.crf = { q: '', echus: false });
+    m.innerHTML = `<div id="crk"></div>
+      <div class="filters"><div class="search" style="margin:0;flex:1">${icon('search')}<input class="input" id="crq" placeholder="Rechercher un client" value="${esc(f.q)}"></div></div>
+      <div class="chips"><button class="chip ${f.echus ? '' : 'on'}" data-e="0">Tous</button><button class="chip ${f.echus ? 'on' : ''}" data-e="1">Échus seulement</button></div>
+      <div id="crres"><div class="spinner"></div></div>
+      <button class="btn block" id="crx" style="margin-top:12px">${icon('download')} Exporter en Excel</button>`;
+    let D = null;
+    const load = async () => {
+      D = await rpc('credit_overview', { q: f.q || null, echus: f.echus });
+      const k = m.querySelector('#crk'); if (!k) return;
+      k.innerHTML = `<div class="kpis">
+        <div class="kpi"><div class="label">Total des créances clients</div><div class="value num ${D.total_du ? 'neg' : ''}">${fmt(D.total_du)}</div></div>
+        <div class="kpi"><div class="label">Échu (en retard)</div><div class="value num ${D.total_echu ? 'neg' : ''}">${fmt(D.total_echu)}</div></div>
+        <div class="kpi"><div class="label">Non échu</div><div class="value num">${fmt(D.total_non_echu)}</div></div>
+        <div class="kpi"><div class="label">Avances des clients</div><div class="value num">${fmt(D.total_avances)}</div><div class="sub">argent qui leur appartient</div></div></div>`;
+      m.querySelector('#crres').innerHTML = D.clients.length ? `<div class="list">${D.clients.map(x => `<button class="row" data-crc="${x.client_id}"><div class="ico rc">${esc(initials(x.name))}</div>
+          <div class="main"><div class="t">${esc(x.name)} ${x.days_late ? `<span class="tag red">${x.days_late} j de retard</span>` : ''}</div>
+            <div class="s">${esc([x.phone, x.dette ? `${x.open_n} vente(s) non soldée(s)` : '', x.next_due ? 'prochaine échéance ' + fmtDate(x.next_due) : '', x.echu ? 'échu ' + fmt(x.echu) : '',
+              x.avance ? 'avance ' + fmt(x.avance) : '', x.credit_allowed ? 'plafond ' + fmt(x.credit_limit) : 'crédit non autorisé'].filter(Boolean).join(' · '))}</div></div>
+          <div class="end"><div class="amt num ${x.dette ? 'neg' : 'pos'}">${x.dette ? fmt(x.dette) : x.avance ? '+' + fmt(x.avance) : 'à jour'}</div></div></button>`).join('')}</div>`
+        : '<div class="list"><div class="empty">Aucune créance.</div></div>';
+      m.querySelectorAll('[data-crc]').forEach(b => b.onclick = async () => {
+        const r = await rpc('search_clients', { q: (D.clients.find(x => x.client_id === Number(b.dataset.crc)) || {}).name || '', limit: 10 });
+        const cl = r.find(x => x.id === Number(b.dataset.crc)); if (cl) sheetClient(cl);
+      });
+    };
+    m.querySelector('#crq').addEventListener('input', debounce(e => { f.q = e.target.value.trim(); load(); }, 250));
+    m.querySelectorAll('[data-e]').forEach(b => b.onclick = () => { f.echus = b.dataset.e === '1'; route(); });
+    m.querySelector('#crx').onclick = e => busy(e.currentTarget, async () => {
+      await loadXLSX(); const XL = window.XLSX, wb = XL.utils.book_new();
+      const ws = XL.utils.json_to_sheet(D.clients.map(x => ({ Client: x.name, 'Téléphone': x.phone || '', 'Nous doit': Number(x.dette), 'Dont échu': Number(x.echu),
+        'Retard max (jours)': x.days_late || '', 'Prochaine échéance': x.next_due ? fmtDate(x.next_due) : '', 'Avance': Number(x.avance), Plafond: Number(x.credit_limit) })));
+      ws['!cols'] = [32, 14, 12, 12, 16, 16, 10, 12].map(w => ({ wch: w }));
+      XL.utils.book_append_sheet(wb, ws, 'Créances clients');
+      XL.writeFile(wb, `Creances clients ${todayIso()}.xlsx`);
+    });
     await load();
   }
 
@@ -1329,18 +1475,32 @@
     });
   }
 
+  const CR_STATUS = { non_payee: ['Non payée', 'red'], partielle: ['Partiellement payée', 'amber'], payee: ['Payée', 'green'] };
+  const creditRow = x => `<div class="row"><div class="ico ${x.remaining > 0 ? (x.days_late ? 'out' : 'neu') : 'in'}">${icon('receipt')}</div>
+    <div class="main"><div class="t">${esc(x.label || 'Vente à crédit')}</div>
+      <div class="s">${fmtDate(isoDay(new Date(x.created_at)))} · ${fmt(x.amount)} · échéance ${fmtDate(x.due_date)}${x.days_late ? ` · <b class="neg">${x.days_late} j de retard</b>` : ''}</div></div>
+    <div class="end"><div class="amt num ${x.remaining > 0 ? 'neg' : ''}">${x.remaining > 0 ? 'reste ' + fmt(x.remaining) : ''}</div><span class="tag ${CR_STATUS[x.status][1]}">${CR_STATUS[x.status][0]}</span></div></div>`;
+
   async function sheetClient(cl) {
-    const hist = await rpc('list_operations', { client_id: cl.id, from: '2000-01-01', limit: 40 });
+    const [hist, ca] = await Promise.all([rpc('list_operations', { client_id: cl.id, from: '2000-01-01', limit: 40 }), rpc('client_account', { client_id: cl.id })]);
+    const open = ca.credits.filter(x => x.remaining > 0), done = ca.credits.filter(x => x.remaining <= 0).slice(-10).reverse();
     sheet({
       title: cl.name, wide: true,
       body: `<div class="cols"><div>
           <div class="kpis" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
-            <div class="kpi"><div class="label">Solde du client</div><div class="value num ${Number(cl.avoir) > 0 ? 'pos' : ''}">${fmt(cl.avoir || 0)}</div><div class="sub">monnaie gardée chez nous</div></div>
+            <div class="kpi"><div class="label">Compte client</div><div class="value num ${ca.dette > 0 ? 'neg' : ca.avance > 0 ? 'pos' : ''}" style="font-size:18px">${esc(clientPosLine(ca.position))}</div>
+              <div class="sub">${ca.credit_allowed ? `Crédit autorisé · plafond ${fmt(ca.credit_limit)} · disponible ${fmt(ca.disponible)} · ${ca.credit_days} j` : 'Crédit non autorisé'}</div></div>
             <div class="kpi"><div class="label">Points fidélité</div><div class="value num">${cl.points || 0} ${levelTag(cl.points)}</div><div class="sub">${cl.first_at ? 'client depuis ' + fmtDate(isoDay(new Date(cl.first_at))) : '1 point par passage'}</div></div>
           </div>
           <div class="grid2" style="margin-bottom:12px">
-            <button class="btn small" data-x="dep">${icon('in')} Déposer</button>
-            <button class="btn small" data-x="ren" ${Number(cl.avoir) > 0 ? '' : 'disabled'}>${icon('out')} Rendre sa monnaie</button></div>
+            <button class="btn small primary" data-x="regl">${icon('in')} Enregistrer un règlement</button>
+            <button class="btn small" data-x="rel">${icon('list')} Relevé</button>
+            <button class="btn small" data-x="dep">${icon('in')} Déposer (avance)</button>
+            <button class="btn small" data-x="ren" ${ca.avance > 0 ? '' : 'disabled'}>${icon('out')} Rendre son avance</button>
+            ${isMgr() ? `<button class="btn small" data-x="crset">${icon('adjust')} Réglages du crédit</button>` : ''}
+            ${can('ajust') ? `<button class="btn small" data-x="craj">Correction justifiée</button>` : ''}</div>
+          ${open.length ? section('Ventes à crédit non soldées', `<div class="list">${open.map(creditRow).join('')}</div>`) : ''}
+          ${done.length ? section('Ventes à crédit soldées', `<div class="list">${done.map(creditRow).join('')}</div>`) : ''}
           <dl class="kv"><dt>Téléphone</dt><dd>${esc(cl.phone || '—')}</dd>${cl.note ? `<dt>Note</dt><dd>${esc(cl.note)}</dd>` : ''}
             <dt>Dernière visite</dt><dd>${cl.last_at ? fmtDT(cl.last_at) : '—'}</dd>
             <dt>Total des opérations</dt><dd>${fmt(cl.volume || 0)}</dd></dl>
@@ -1350,8 +1510,13 @@
       foot: `<button class="btn" data-x="edit">Modifier la fiche</button><button class="btn primary" data-x="op">${icon('plus')} Nouvelle opération</button>`,
       onMount(c) {
         const reopen = async () => { const r = await rpc('search_clients', { q: cl.phone || cl.name, limit: 10 }); sheetClient(r.find(x => x.id === cl.id) || cl); };
-        c.q('[data-x=dep]').onclick = () => { c.close(); sheetAvoir(cl, 'depot', reopen); };
-        c.q('[data-x=ren]').onclick = () => { c.close(); sheetAvoir(cl, 'rendre', reopen); };
+        const clx = Object.assign({}, cl, { avoir: ca.avance });
+        c.q('[data-x=dep]').onclick = () => { c.close(); sheetAvoir(clx, 'depot', reopen); };
+        c.q('[data-x=ren]').onclick = () => { c.close(); sheetAvoir(clx, 'rendre', reopen); };
+        c.q('[data-x=regl]').onclick = () => { c.close(); sheetReglement(cl, ca, reopen); };
+        c.q('[data-x=rel]').onclick = () => exportClientReleve(cl, ca);
+        const cs = c.q('[data-x=crset]'); if (cs) cs.onclick = () => { c.close(); sheetCreditSettings(cl, ca, reopen); };
+        const cj = c.q('[data-x=craj]'); if (cj) cj.onclick = () => { c.close(); sheetClientAjust(cl, reopen); };
         c.q('[data-x=edit]').onclick = () => { c.close(); sheetClientEdit(cl, saved => sheetClient(saved)); };
         c.q('[data-x=op]').onclick = () => { c.close(); sheetVente({ client: cl }); };
         c.q('[data-x=card]').onclick = () => { c.close(); sheetCard(null, { client: cl, onSaved: async () => { const r = await rpc('search_clients', { q: cl.phone || cl.name, limit: 5 }); sheetClient(r.find(x => x.id === cl.id) || cl); } }); };
@@ -1721,7 +1886,8 @@
 
   // ---------------------------------------------------------------- écrans gérante
   async function vTableau(m) {
-    const [d, parts] = await Promise.all([rpc('dashboard'), can('fournisseurs') ? rpc('list_partenaires').catch(() => []) : Promise.resolve([])]);
+    const [d, parts, crv] = await Promise.all([rpc('dashboard'), can('fournisseurs') ? rpc('list_partenaires').catch(() => []) : Promise.resolve([]),
+      rpc('credit_overview').catch(() => null)]);
     rememberBalances(d);
     S.partenaires = parts;
     const B = d.balances;
@@ -1757,9 +1923,13 @@
             <div class="main"><div class="t">${esc(p.name)} · ${esc(x.t.replace('Le partenaire', 'il').replace('au partenaire', 'lui'))}${x.amt ? ' ' + fmt(x.amt) : ''}</div>
               <div class="s">${[p.cards_position != null && Number(p.cards_position) ? 'cartes : ' + esc(lcFirst(posLine(p.cards_position))) : '', p.pending_n ? p.pending_n + ' opération(s) en attente' : ''].filter(Boolean).join(' · ') || 'à jour'}</div></div>
             <div class="end"><div class="amt num ${x.cls}">${x.amt ? fmt(x.amt) : '—'}</div></div></a>`; }).join('')}</div>`) : ''; })()}
-      ${(() => { const dueCl = -sum(B.filter(b => b.kind === 'avoir')); return dueCl > 0 ? section('Clients', `<div class="list"><a class="row" href="#/clients" data-avoirlist="1"><div class="ico neu">${icon('users')}</div>
-        <div class="main"><div class="t">Monnaie gardée pour les clients : ${fmt(dueCl)}</div><div class="s">Argent en caisse qui appartient aux clients · toucher pour la liste</div></div>
-        <div class="end"><div class="amt num warn">${fmt(dueCl)}</div></div></a></div>`) : ''; })()}
+      ${crv && (crv.total_du || crv.total_avances) ? section('Clients', `<div class="list">
+        ${crv.total_du ? `<a class="row" href="#/credits"><div class="ico out">${icon('receipt')}</div>
+          <div class="main"><div class="t">Les clients nous doivent ${fmt(crv.total_du)}</div><div class="s">${crv.total_echu ? `dont ${fmt(crv.total_echu)} en retard · ` : ''}toucher pour le suivi des crédits</div></div>
+          <div class="end"><div class="amt num ${crv.total_echu ? 'neg' : 'warn'}">${fmt(crv.total_du)}</div></div></a>` : ''}
+        ${crv.total_avances ? `<a class="row" href="#/clients" data-avoirlist="1"><div class="ico neu">${icon('users')}</div>
+          <div class="main"><div class="t">Avances des clients : ${fmt(crv.total_avances)}</div><div class="s">Monnaie gardée et trop-versés : argent qui leur appartient</div></div>
+          <div class="end"><div class="amt num">${fmt(crv.total_avances)}</div></div></a>` : ''}</div>`) : ''}
       <div class="cols">
         <div>
           ${section('Soldes GTP', balList(gtp, true), `<span class="num">${fmt(sum(gtp))}</span>`)}
@@ -2090,7 +2260,10 @@
         <div class="grid2">${field('Montant à recharger', moneyInput('amount', 'autofocus'))}${field('Montant facturé au client', moneyInput('billed'))}</div>
         <div class="grid2">${field('Montant dû au partenaire', moneyInput('due_partner'), 'Montant qu’il recharge, plus ses frais éventuels.')}<div class="field"><span>Notre commission</span><div class="change num" id="pcom">—</div></div></div>
         <div class="avbox"><label class="check"><input type="checkbox" name="paynow" checked> Le client paie maintenant</label>
-          <div id="pnow">${field('Encaissé sur', `<select class="input" name="acc">${cashOpts()}</select>`)}</div></div>${ref}`;
+          <div id="pnow">${field('Encaissé sur', `<select class="input" name="acc">${cashOpts()}</select>`)}
+            <div class="grid2">${field('Montant payé maintenant', moneyInput('paid'), 'Vide = tout le montant facturé.')}<div></div></div></div></div>
+        <div class="avbox hidden" id="pcredit"><label class="check"><input type="checkbox" name="credit"> Le reste est à crédit (dette créée à la réussite de la recharge)</label>
+          <div class="grid2">${field('Échéance', '<input class="input" type="date" name="credit_due">')}<div class="small muted" id="pcrinfo" style="align-self:center"></div></div></div>${ref}`;
     } else if (type === 'paiement') {
       body = `<div class="grid2">${field('Bénéficiaire', '<input class="input autofocus" name="beneficiary" autocomplete="off">')}${field('Téléphone', '<input class="input" name="beneficiary_phone" inputmode="tel">')}</div>
         <div class="grid2">${field('Montant à payer', moneyInput('amount'))}${field('Commission AYAEL (facultatif)', moneyInput('commission'))}</div>
@@ -2144,7 +2317,16 @@
         const tg = (chk, box) => { const ch = c.q(`[name=${chk}]`), bx = c.q(box); if (ch && bx) ch.onchange = () => bx.classList.toggle('hidden', !ch.checked); };
         tg('paynow', '#pnow'); tg('vir', '#pvir');
         if (type === 'recharge') {
-          clientPicker(c, c.q('#pcl'), (cl, name) => { client = cl; clientName = name; });
+          clientPicker(c, c.q('#pcl'), (cl, name) => {
+            client = cl; clientName = name;
+            const box = c.q('#pcredit'), ok = !!(cl && cl.credit_allowed);
+            box.classList.toggle('hidden', !ok);
+            if (ok) {
+              const x = new Date(); x.setDate(x.getDate() + (Number(cl.credit_days) || 30)); c.q('[name=credit_due]').value = isoDay(x);
+              const det = Math.max(-(Number(cl.avoir) || 0), 0);
+              c.q('#pcrinfo').textContent = `Doit déjà ${fmt(det)} · plafond ${fmt(cl.credit_limit)}`;
+            } else c.q('[name=credit]').checked = false;
+          });
           const upd = () => {
             const a = amt('amount') || 0;
             if (!c.q('[name=billed]').dataset.edited) c.q('[name=billed]').value = a ? fmtN(a) : '';
@@ -2175,7 +2357,8 @@
           if (type === 'recharge') {
             Object.assign(pl, { client_id: client ? client.id : null, client_name: client ? null : clientName, service: chipVal(c, 'svc'), card_ref: val('card_ref'),
               amount: amt('amount'), billed: amt('billed'), due_partner: amt('due_partner') });
-            if (now) Object.assign(pl, { encaisse: amt('billed') || amt('amount'), account_id: Number(val('acc')) });
+            if (now) Object.assign(pl, { encaisse: amt('paid') || amt('billed') || amt('amount'), account_id: Number(val('acc')) });
+            if (c.q('[name=credit]').checked) Object.assign(pl, { credit: true, credit_due: val('credit_due') });
           } else if (type === 'paiement') {
             Object.assign(pl, { beneficiary: val('beneficiary'), beneficiary_phone: val('beneficiary_phone'), amount: amt('amount'),
               to_recover: (amt('amount') || 0) + (amt('commission') || 0) });
@@ -2196,7 +2379,15 @@
           } else if (type === 'ouverture') {
             Object.assign(pl, { amount: (amt('amount') || 0) * Number(chipVal(c, 'sens')), scope: chipVal(c, 'scope') || 'financier' });
           }
-          const r = await rpc('create_dossier', pl);
+          let r;
+          try { r = await rpc('create_dossier', pl); }
+          catch (err) {
+            const msg = String(err.message || '');
+            if (!/^PLAFOND: /.test(msg)) throw err;
+            if (!isMgr()) throw new Error(msg.slice(9) + ' Demandez l’accord d’un responsable.');
+            if (!await ask('Plafond de crédit dépassé', `<p>${esc(msg.slice(9))}</p><p>Autoriser quand même ?</p>`, 'Oui, j’autorise', true)) return;
+            r = await rpc('create_dossier', Object.assign(pl, { force_credit: true }));
+          }
           let d = r.dossier;
           if (after) d = (await rpc('dossier_action', Object.assign({ dossier_id: d.id, idem_key: uid() }, after))).dossier;
           c.close(); toast(`Enregistré : ${d.ref}.`, 'ok'); refreshNow();
@@ -2274,7 +2465,7 @@
     S._dossierSheet = c;
   }
   const STAGES = { encaissement: 'Encaissement', execution: 'Réalisé par le partenaire', remboursement: 'Remboursement du client', paiement: 'Payé au bénéficiaire',
-    alimentation: 'Alimentation reçue', virement: 'Virement au partenaire', paiement_cartes: 'Paiement des cartes', reception: 'Réception de cartes', ouverture: 'Solde d’ouverture' };
+    alimentation: 'Alimentation reçue', credit: 'Créance client (reste à payer)', virement: 'Virement au partenaire', paiement_cartes: 'Paiement des cartes', reception: 'Réception de cartes', ouverture: 'Solde d’ouverture' };
 
   // Petit formulaire de confirmation : chaque envoi porte une clé unique (une confirmation répétée ne compte qu'une fois).
   function actForm(d, action, title, body, after, okLabel = 'Confirmer') {
@@ -2604,6 +2795,7 @@
         ${isDir() ? item('#/doublons', 'users', 'Clients en double', 'Repérer et fusionner les fiches d’une même personne') : ''}
         ${item('#/commissions', 'card', 'Commissions à vérifier', 'Pointer les commissions avec le rapport du GTP')}
         ${can('fournisseurs') ? item('#/fournisseurs', 'truck', 'Partenaires et fournisseurs', 'Position avec chaque partenaire, demandes, relevés') : ''}
+        ${item('#/credits', 'receipt', 'Crédits clients', 'Qui nous doit, échéances, retards, règlements')}
         ${item('#/dossiers', 'swap', 'Opérations partenaires', 'Recharges Ecobank / BNI, paiements, transferts Wave / OM / MTN')}
         ${item('#/stock', 'tag', 'Stock de cartes', 'Cartes physiques en stock, à recevoir, vendues')}
         ${can('clotures') ? item('#/rapports', 'chart', 'Rapports', 'Par agence, par produit, par GTP, par agent, commissions par mois') : ''}
@@ -3281,6 +3473,7 @@
     clotures: { title: 'Clôtures', render: vClotures, live: true, mgr: true, perm: 'clotures' },
     fournisseurs: { title: 'Partenaires et fournisseurs', render: vPartenaires, live: true, mgr: true, perm: 'fournisseurs' },
     dossiers: { title: 'Opérations partenaires', render: vDossiers, live: true, need: 'can_caisse' },
+    credits: { title: 'Crédits clients', render: vCredits, live: true },
     stock: { title: 'Stock de cartes', render: vStock, live: true, mgr: true },
     plus: { title: 'Plus', render: vPlus, mgr: true },
     rapports: { title: 'Rapports', render: vRapports, mgr: true, perm: 'clotures' },
