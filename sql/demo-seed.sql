@@ -75,8 +75,40 @@ insert into auth.users(id, email, raw_user_meta_data) values
   ('00000000-0000-0000-0000-000000000006', 'sousgerante@ayael.app', '{"full_name":"Sous-gérante (démo)"}')
 on conflict do nothing;
 select save_profile('{"id":"00000000-0000-0000-0000-000000000006","role":"sous_gerant","active":true,"perm_appro":true,"perm_fournisseurs":true}');
-select save_fournisseur('{"name":"Moov Distribution","phone":"90 00 00 00","note":"Float Moov Money, crédit Moov"}');
+select save_partenaire('{"name":"Moov Distribution","country":"Togo","contacts":"90 00 00 00","products":"Solde électronique Moov Money, crédit Moov"}');
 select op_approvisionnement(jsonb_build_object('gtp_id', (select id from accounts where name = 'Mixx agent 1'), 'amount', 100000,
-  'source_id', (select id from accounts where name = 'Moov Distribution'), 'details', 'Float Mixx (démo)'));
+  'source_id', (select id from accounts where name = 'Moov Distribution'), 'details', 'Solde électronique Mixx (démo)'));
+
+-- Partenaire en Côte d'Ivoire : l'exemple du cahier des charges (il doit 400 000 F à AYAEL).
+select save_partenaire('{"name":"Partenaire CI (démo)","country":"Côte d''Ivoire","contacts":"M. Koné · +225 07 00 00 00",
+  "products":"Cartes physiques, alimentation UBA / GTCO, recharges Ecobank et BNI, paiements de bénéficiaires, Wave / Orange Money / MTN",
+  "conditions":"Frais Ecobank / BNI : 1 % du montant","payment_terms":"Compensation chaque fin de semaine","cartes_compensees":false}');
+select op_ajustement(jsonb_build_object('account_id', (select id from accounts where name = 'Coffre'), 'target', 3000000, 'details', 'Coffre (démo)'));
+select create_dossier(jsonb_build_object('partenaire_id', (select id from partenaires where name = 'Partenaire CI (démo)'), 'type', 'paiement',
+  'beneficiary', 'KOFFI AMAVI', 'beneficiary_phone', '90 55 44 33', 'amount', 2000000, 'details', 'Demande du partenaire (démo)'));
+select dossier_action(jsonb_build_object('dossier_id', (select max(id) from partner_ops), 'action', 'paiement',
+  'account_id', (select id from accounts where name = 'Coffre')));
+select create_dossier(jsonb_build_object('partenaire_id', (select id from partenaires where name = 'Partenaire CI (démo)'), 'type', 'appro',
+  'lines', jsonb_build_array(jsonb_build_object('account_id', (select id from accounts where name = 'GTCO principal'), 'amount', 1500000),
+                             jsonb_build_object('account_id', (select id from accounts where name = 'UBA AfricSika'), 'amount', 1000000))));
+select dossier_action(jsonb_build_object('dossier_id', (select max(id) from partner_ops), 'action', 'alimentation',
+  'account_id', (select id from accounts where name = 'GTCO principal'), 'amount', 1500000, 'reference', 'GTCO-DEMO-01'));
+select create_dossier(jsonb_build_object('partenaire_id', (select id from partenaires where name = 'Partenaire CI (démo)'), 'type', 'recharge',
+  'client_id', (select id from clients where name = 'DOPENYO AYAWA FLORENCE'), 'service', 'BNI', 'card_ref', '4521000012349316',
+  'amount', 100000, 'billed', 102000, 'due_partner', 100000, 'encaisse', 102000));
+select dossier_action(jsonb_build_object('dossier_id', (select max(id) from partner_ops), 'action', 'execution', 'reference', 'BNI-OK-77'));
+-- Une recharge Ecobank encore en attente (payée par le client, pas encore faite par le partenaire).
+select create_dossier(jsonb_build_object('partenaire_id', (select id from partenaires where name = 'Partenaire CI (démo)'), 'type', 'recharge',
+  'client_id', (select id from clients where name = 'YASMINE DAOUDA'), 'service', 'Ecobank', 'card_ref', '5199000077771234',
+  'amount', 50000, 'billed', 51000, 'encaisse', 51000));
+-- Cartes physiques : deux types, une commande reçue en partie.
+select save_card_type('{"name":"Carte UBA AfricSika","bank":"UBA","sale_price":5000}');
+select save_card_type('{"name":"Carte GTCO Visa","bank":"GTCO","sale_price":6000}');
+select create_dossier(jsonb_build_object('partenaire_id', (select id from partenaires where name = 'Partenaire CI (démo)'), 'type', 'cartes',
+  'invoice_ref', 'FAC-CI-2026-031', 'lines', jsonb_build_array(
+    jsonb_build_object('card_type_id', (select id from card_types where name = 'Carte UBA AfricSika'), 'qty', 50, 'unit_price', 3500),
+    jsonb_build_object('card_type_id', (select id from card_types where name = 'Carte GTCO Visa'), 'qty', 20, 'unit_price', 4000))));
+select dossier_action(jsonb_build_object('dossier_id', (select max(id) from partner_ops), 'action', 'reception',
+  'lines', jsonb_build_array(jsonb_build_object('card_type_id', (select id from card_types where name = 'Carte UBA AfricSika'), 'qty', 30))));
 
 select set_config('app.uid', '', false);

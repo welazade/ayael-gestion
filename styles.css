@@ -129,7 +129,8 @@ button.row:active, a.row:active { background: #F6F6F8; }
 .action { background: var(--card); border: 0; border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 8px; display: flex; flex-direction: column;
   align-items: center; gap: 6px; font-weight: 600; font-size: 14px; cursor: pointer; color: var(--ink); text-decoration: none; text-align: center; }
 .action svg { width: 26px; height: 26px; color: var(--brand); flex: none; }
-.actions.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.actions.four, .actions.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.actions.two .action { font-size: 13.5px; }
 .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 @media (min-width: 560px) { .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; } }
 
@@ -282,6 +283,17 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .change { font-size: 22px; font-weight: 750; }
 .panel { background: #F6F6F8; border-radius: 12px; padding: 12px; margin-bottom: 14px; }
 .hint { font-size: 12px; color: var(--muted); align-self: center; }
+
+/* ---------- Relevé partenaire (impression A4) ---------- */
+.releve { font: 10pt/1.4 Inter, "Segoe UI", Arial, sans-serif; color: #111; }
+.releve img { height: 16mm; }
+.releve h1 { font-weight: 400; font-size: 16pt; margin: 4mm 0 1mm; }
+.releve p { color: #555; margin: 0 0 4mm; }
+.releve table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+.releve th, .releve td { text-align: left; padding: 1.6mm 2mm; border-bottom: .2mm solid #ddd; vertical-align: top; }
+.releve .r { text-align: right; white-space: nowrap; }
+.releve .sub { color: #777; font-size: 8pt; }
+.releve .fin { margin-top: 5mm; font-size: 12pt; color: #111; }
 
 /* ---------- Clients : fidélité et compte ---------- */
 .clrow { display: flex; align-items: center; gap: 8px; }

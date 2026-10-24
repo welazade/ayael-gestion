@@ -7,7 +7,7 @@
 (() => {
   const PGLITE_URL = 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.2.17/dist/index.js';
   const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-  const DEMO_SCHEMA_VERSION = '13';
+  const DEMO_SCHEMA_VERSION = '15';
   const LOGIN_DOMAIN = 'ayael.app';
 
   const $app = document.getElementById('app');
@@ -63,7 +63,7 @@
   const roleLabel = r => ({ gerante: 'Direction', gerant: 'Gérant(e) d’agence', sous_gerant: 'Sous-gérant(e)', agent: 'Agent' }[r] || r);
   // Droits (comme dans la base) : direction et gérant d'agence ont tout ; un sous-gérant ce qui est coché.
   const PERMS = [['appro', 'Approvisionner les comptes (et faire des transferts)'], ['produits', 'Ajouter / modifier des produits'],
-    ['ajust', 'Ajuster les soldes'], ['clotures', 'Valider les clôtures, voir les rapports'], ['fournisseurs', 'Gérer les fournisseurs (achats, paiements)']];
+    ['ajust', 'Ajuster les soldes'], ['clotures', 'Valider les clôtures, voir les rapports'], ['fournisseurs', 'Partenaires et fournisseurs (demandes, confirmations, paiements, relevés)']];
   const can = perm => !!S.me && (S.me.role === 'gerante' || S.me.role === 'gerant' || (S.me.role === 'sous_gerant' && !!S.me['perm_' + perm]));
   // Compte de « mon » agence (comme _mine dans la base).
   const mine = a => isDir() || a.agence_id === S.me.agence_id || (a.agence_id == null && !!S.me.is_main_agence);
@@ -101,7 +101,7 @@
     }
   }
   const PERIODS = [['today', 'Aujourd’hui'], ['yesterday', 'Hier'], ['7d', '7 jours'], ['month', 'Ce mois'], ['lastmonth', 'Mois dernier'], ['year', 'Cette année'], ['custom', 'Dates…']];
-  const KIND = { caisse: 'Caisse', recharge: 'Recharge', approvisionnement: 'Approvisionnement', depense: 'Dépense', ajustement: 'Ajustement', transfert: 'Transfert', cloture: 'Remise de caisse', avoir: 'Monnaie client' };
+  const KIND = { caisse: 'Caisse', recharge: 'Recharge', approvisionnement: 'Approvisionnement', depense: 'Dépense', ajustement: 'Ajustement', transfert: 'Transfert', cloture: 'Remise de caisse', avoir: 'Monnaie client', partenaire: 'Partenaire' };
   // Niveau de fidélité selon les points (1 point par passage en caisse).
   const LEVELS = [[50, 'Or', 'gold'], [20, 'Argent', 'silver'], [5, 'Bronze', 'bronze']];
   const level = pts => LEVELS.find(l => Number(pts) >= l[0]) || null;
@@ -362,7 +362,7 @@
           let r;
           try { r = (await db.query(`select public.${name}($1::jsonb) as r`, [JSON.stringify(p || {})])).rows[0].r; }
           catch (e) { throw new Error(e.message); }
-          if (/^(op_|save_|closing_submit|closing_validate|import_)/.test(name)) setTimeout(() => listeners.forEach(f => f()), 0);
+          if (/^(op_|save_|closing_submit|closing_validate|import_|create_dossier|dossier_action|stock_adjust|add_piece)/.test(name)) setTimeout(() => listeners.forEach(f => f()), 0);
           return r;
         });
       },
@@ -542,15 +542,18 @@
   // Menu latéral (ordinateur)
   function navItems() {
     if (isDir()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'], ['clotures', 'Clôtures', 'lock'],
-      ['commissions', 'Commissions à vérifier', 'card'], ['fournisseurs', 'Fournisseurs', 'truck'], ['rapports', 'Rapports', 'chart'], 'Réglages',
+      ['commissions', 'Commissions à vérifier', 'card'], ['fournisseurs', 'Partenaires', 'truck'], ['dossiers', 'Opérations partenaires', 'swap'],
+      ['stock', 'Stock de cartes', 'tag'], ['rapports', 'Rapports', 'chart'], 'Réglages',
       ['agences', 'Agences', 'bank'], ['equipe', 'Équipe', 'user'], ['comptes', 'Comptes et commissions', 'bank'], ['produits', 'Produits de caisse', 'tag'],
       ['cartes', 'Cartes clients', 'card'], ['doublons', 'Clients en double', 'users'], ['import', 'Importer depuis Excel', 'upload'], ['plus', 'Autres réglages', 'grid']];
     if (isMgr()) return [['tableau', 'Tableau de bord', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'],
       ...(can('clotures') ? [['clotures', 'Clôtures', 'lock']] : []), ['commissions', 'Commissions à vérifier', 'card'],
-      ...(can('fournisseurs') ? [['fournisseurs', 'Fournisseurs', 'truck']] : []), ...(can('clotures') ? [['rapports', 'Rapports', 'chart']] : []),
+      ...(can('fournisseurs') ? [['fournisseurs', 'Partenaires', 'truck']] : []), ['dossiers', 'Opérations partenaires', 'swap'], ['stock', 'Stock de cartes', 'tag'],
+      ...(can('clotures') ? [['rapports', 'Rapports', 'chart']] : []),
       ...(can('produits') ? [['produits', 'Produits de caisse', 'tag']] : []), ['cartes', 'Cartes clients', 'card'], ['plus', 'Plus', 'grid']];
     return [['accueil', 'Accueil', 'home'], ['journal', 'Journal', 'list'], ['clients', 'Clients', 'users'],
-      ...(S.me.can_recharge ? [['commissions', 'Commissions à vérifier', 'card']] : []), ['cloture', 'Clôture du soir', 'lock']];
+      ...(S.me.can_recharge ? [['commissions', 'Commissions à vérifier', 'card']] : []),
+      ...(S.me.can_caisse ? [['dossiers', 'Opérations partenaires', 'swap']] : []), ['cloture', 'Clôture du soir', 'lock']];
   }
   const firstView = () => isMgr() ? 'tableau' : 'accueil';
 
@@ -672,6 +675,13 @@
       case 'cloture':
         Object.assign(r, { sym: icon('lock'), title: 'Remise de caisse', sub: o.details || '' });
         break;
+      case 'partenaire': {
+        const t = { encaissement: 'Encaissement', execution: 'Réalisé par le partenaire', remboursement: 'Remboursement du client', paiement: 'Paiement pour le partenaire',
+          reception: 'Réception de cartes' }[o.stage] || 'Opération partenaire';
+        const sg = o.stage === 'encaissement' ? 1 : ['paiement', 'remboursement'].includes(o.stage) ? -1 : 0;
+        Object.assign(r, { ico: sg > 0 ? 'in' : sg < 0 ? 'out' : 'neu', sym: icon('swap'), title: t, sign: sg, sub: o.details || '' });
+        break;
+      }
       case 'avoir': {
         const inn = o.category === 'garde' || o.category === 'depot';
         const t = { garde: 'Monnaie gardée', depot: 'Dépôt sur compte client', utilise: 'Payé avec la monnaie du client', rendu: 'Monnaie rendue' }[o.category] || 'Monnaie client';
@@ -733,6 +743,7 @@
             <button class="action" data-do="depense">${icon('out')}Dépense</button>
             <a class="action" href="#/clients">${icon('users')}Clients</a>
             <a class="action" href="#/cloture">${icon('lock')}Clôture</a>
+            ${S.me.can_caisse ? `<a class="action" href="#/dossiers">${icon('swap')}Opérations partenaires</a>` : ''}
           </div>
           ${section('Mes dernières opérations', opList(d.recent, false, 'Aucune opération pour le moment.'))}
         </div>
@@ -772,7 +783,8 @@
     const st = { client: preset.client || null, lines: [], pay: S.me.caisse_id, sel: '', cardId: null, gtpId: null, commEdited: false, passName: '' };
     if (preset.card && canR) { st.sel = 'R'; st.cardId = preset.card.id; }
     const prods = S.products.filter(p => p.active);
-    const pays = [[S.me.caisse_id, 'Espèces'], ...S.accounts.filter(a => a.active && myAcc(a) && (a.kind === 'electronique' || a.kind === 'banque'))
+    if (prods.some(p => p.card_type_id)) rpc('list_stock').then(s => { S._stock = s; }).catch(() => {});
+    const pays =[[S.me.caisse_id, 'Espèces'], ...S.accounts.filter(a => a.active && myAcc(a) && (a.kind === 'electronique' || a.kind === 'banque'))
       .map(a => [a.id, a.kind === 'banque' ? 'Versement bancaire' : a.name])];
     const cats = {};
     prods.forEach(p => { const k = p.category || 'Autres'; (cats[k] = cats[k] || []).push(p); });
@@ -896,12 +908,20 @@
         const p = S.products.find(x => x.id === Number(st.sel));
         const elecs = S.accounts.filter(a => a.active && myAcc(a) && (a.kind === 'electronique' || a.kind === 'banque'));
         const cnt = counterFor(p, elecs);
+        const ct = p.card_type_id ? (S._stock || []).find(t => t.id === p.card_type_id) : null;
         box.innerHTML = `
-          ${field(p.direction === 'entree' ? 'Montant' : 'Montant remis au client', moneyInput('vamt', 'autofocus'))}
+          ${p.card_type_id ? `<div class="grid2">${field('Nombre de cartes', '<input class="input" name="vqty" inputmode="numeric" value="1">', ct ? `En stock : ${ct.stock}` : '')}
+            ${field('Montant', moneyInput('vamt', `value="${ct && ct.sale_price ? fmtN(ct.sale_price) : ''}"`))}</div>`
+            : field(p.direction === 'entree' ? 'Montant' : 'Montant remis au client', moneyInput('vamt', 'autofocus'))}
           ${p.counter_account_id ? field('Compte électronique utilisé', `<select class="input" id="vcounter">${cnt ? '' : '<option value="">— Choisir le compte —</option>'}${options(elecs.map(a => [a.id, a.name]), cnt || '')}</select>`) : ''}
           ${field('Détails (facultatif)', `<input class="input" id="vdet" autocomplete="off" placeholder="N° de téléphone, référence…" value="${p.counter_account_id && st.client && st.client.phone ? esc(st.client.phone) : ''}">`)}
           ${addBtn}`;
         bindMoney(box);
+        const qi = box.querySelector('[name=vqty]');
+        if (qi) {
+          qi.focus(); qi.select();
+          qi.addEventListener('input', () => { if (ct && ct.sale_price) box.querySelector('[name=vamt]').value = fmtN((parseInt(qi.value) || 0) * ct.sale_price); });
+        }
       }
       box.querySelectorAll('input').forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); addLine(); } }));
       const ab = $('#vadd'); if (ab) ab.onclick = () => addLine();
@@ -929,8 +949,9 @@
         const cnt = $('#vcounter') ? Number($('#vcounter').value) : null;
         if ($('#vcounter') && !cnt) { if (!silent) toast('Choisissez le compte électronique utilisé.', 'bad'); return false; }
         const det = $('#vdet').value.trim();
-        st.lines.push({ type: 'caisse', product_id: p.id, amount: amt, details: det, counter_account_id: cnt, sign: p.direction === 'entree' ? 1 : -1,
-          label: p.name, sub: [det, cnt ? (acc(cnt) || {}).name : ''].filter(Boolean).join(' · ') });
+        const qty = $('[name=vqty]') ? Math.max(parseInt($('[name=vqty]').value) || 1, 1) : null;
+        st.lines.push({ type: 'caisse', product_id: p.id, amount: amt, details: det, counter_account_id: cnt, qty, sign: p.direction === 'entree' ? 1 : -1,
+          label: qty ? `${p.name} × ${qty}` : p.name, sub: [det, cnt ? (acc(cnt) || {}).name : ''].filter(Boolean).join(' · ') });
       }
       st.sel = ''; drawFields(); drawLines();
       $('#vprod').focus();
@@ -1004,7 +1025,7 @@
         pay_account_id: st.pay, received: rec, avoir_use: u, avoir_keep: k,
         lines: st.lines.map(l => l.type === 'recharge'
           ? { type: 'recharge', card_id: l.card_id, gtp_id: l.gtp_id, amount: l.amount, commission: l.commission }
-          : { type: 'caisse', product_id: l.product_id, amount: l.amount, details: l.details, counter_account_id: l.counter_account_id }) };
+          : { type: 'caisse', product_id: l.product_id, amount: l.amount, details: l.details, counter_account_id: l.counter_account_id, qty: l.qty }) };
       for (let i = 0; i < 3; i++) {
         const r = await rpc('op_vente', payload);
         if (r.ok) {
@@ -1511,7 +1532,7 @@
     if (!o) return;
     const i = opInfo(o);
     const age = (Date.now() - new Date(o.created_at).getTime()) / 60000;
-    const canCancel = o.status === 'ok' && (isDir() || (isMgr() && o.agence_id === S.me.agence_id)
+    const canCancel = o.status === 'ok' && !o.partner_op_id && (isDir() || (isMgr() && o.agence_id === S.me.agence_id)
       || (o.user_id === S.me.id && age < 30 && !o.closing_id && ['caisse', 'recharge', 'depense'].includes(o.kind)));
     const label2 = { caisse: 'Compte électronique', recharge: 'Payé en', approvisionnement: 'Source', transfert: 'Vers', cloture: 'Vers' }[o.kind] || 'Compte 2';
     const rows = [
@@ -1533,8 +1554,11 @@
         ${o.status === 'ok' && !canCancel && !isMgr() ? '<p class="small muted" style="margin-top:16px">Pour annuler cette opération, demandez à votre gérant(e).</p>' : ''}`,
       foot: (canCancel ? '<button class="btn danger" data-x="cancel">Annuler l’opération</button>' : '') +
         (o.receipt_id ? `<button class="btn" data-x="rec">${icon('receipt')} Voir le reçu N° ${pad(o.receipt_id)}</button>` : '') +
-        (canVerify(o) ? '<button class="btn" data-x="com">Vérifier la commission</button>' : ''),
+        (canVerify(o) ? '<button class="btn" data-x="com">Vérifier la commission</button>' : '') +
+        (o.partner_op_id ? '<button class="btn" data-x="dos">Voir le dossier partenaire</button>' : ''),
       onMount(c) {
+        const db = c.q('[data-x=dos]');
+        if (db) db.onclick = () => { c.close(); sheetDossier(o.partner_op_id); };
         const cb = c.q('[data-x=com]');
         if (cb) cb.onclick = () => { c.close(); sheetVerifyCommission(o); };
         const rb = c.q('[data-x=rec]');
@@ -1697,8 +1721,9 @@
 
   // ---------------------------------------------------------------- écrans gérante
   async function vTableau(m) {
-    const d = await rpc('dashboard');
+    const [d, parts] = await Promise.all([rpc('dashboard'), can('fournisseurs') ? rpc('list_partenaires').catch(() => []) : Promise.resolve([])]);
     rememberBalances(d);
+    S.partenaires = parts;
     const B = d.balances;
     const gtp = B.filter(b => b.kind === 'gtp'), el = B.filter(b => ['electronique', 'banque'].includes(b.kind));
     const cais = B.filter(b => b.kind === 'caisse'), cof = B.filter(b => b.kind === 'coffre');
@@ -1721,14 +1746,17 @@
         ${[can('appro') && `<button class="action" data-do="appro">${icon('truck')}Approvisionner un compte</button>`,
           !isDir() && can('appro') && !S.me.is_main_agence && `<button class="action" data-do="reversement">${icon('swap')}Reverser à la principale</button>`,
           can('appro') && `<button class="action" data-do="transfert">${icon('swap')}Transfert entre comptes</button>`,
-          can('fournisseurs') && `<button class="action" data-do="payerfour">${icon('out')}Payer un fournisseur</button>`,
+          can('fournisseurs') && `<a class="action" href="#/fournisseurs">${icon('users')}Partenaires</a>`,
           can('ajust') && `<button class="action" data-do="ajust">${icon('adjust')}Ajuster un solde</button>`,
           `<button class="action" data-do="depense">${icon('out')}Dépense</button>`].filter(Boolean).join('')}
       </div>
       ${(d.liaisons || []).length ? section('Entre agences', liaisonList(d.liaisons)) : ''}
-      ${d.fournisseurs_du != null && Number(d.fournisseurs_du) > 0 ? section('Fournisseurs', `<div class="list"><a class="row" href="#/fournisseurs"><div class="ico neu">${icon('truck')}</div>
-        <div class="main"><div class="t">Nous devons ${fmt(d.fournisseurs_du)} à nos fournisseurs</div><div class="s">Toucher pour le détail et les paiements</div></div>
-        <div class="end"><div class="amt num warn">${fmt(d.fournisseurs_du)}</div></div></a></div>`) : ''}
+      ${(() => { const shown = parts.filter(p => Math.abs(Number(p.position)) >= 1 || Math.abs(Number(p.cards_position || 0)) >= 1 || p.pending_n);
+        return shown.length ? section('Partenaires', `<div class="list">${shown.map(p => { const x = posText(p.position);
+          return `<a class="row" href="#/fournisseurs"><div class="ico rc">${esc(initials(p.name))}</div>
+            <div class="main"><div class="t">${esc(p.name)} · ${esc(x.t.replace('Le partenaire', 'il').replace('au partenaire', 'lui'))}${x.amt ? ' ' + fmt(x.amt) : ''}</div>
+              <div class="s">${[p.cards_position != null && Number(p.cards_position) ? 'cartes : ' + esc(lcFirst(posLine(p.cards_position))) : '', p.pending_n ? p.pending_n + ' opération(s) en attente' : ''].filter(Boolean).join(' · ') || 'à jour'}</div></div>
+            <div class="end"><div class="amt num ${x.cls}">${x.amt ? fmt(x.amt) : '—'}</div></div></a>`; }).join('')}</div>`) : ''; })()}
       ${(() => { const dueCl = -sum(B.filter(b => b.kind === 'avoir')); return dueCl > 0 ? section('Clients', `<div class="list"><a class="row" href="#/clients" data-avoirlist="1"><div class="ico neu">${icon('users')}</div>
         <div class="main"><div class="t">Monnaie gardée pour les clients : ${fmt(dueCl)}</div><div class="s">Argent en caisse qui appartient aux clients · toucher pour la liste</div></div>
         <div class="end"><div class="amt num warn">${fmt(dueCl)}</div></div></a></div>`) : ''; })()}
@@ -1832,7 +1860,7 @@
     const label = a => a.agence_id && (S.agences || []).length > 1 ? `${balLabel(a)} · ${agName(a.agence_id)}` : balLabel(a);
     const gtps = S.accounts.filter(a => a.kind === 'gtp' && a.active && mine(a));
     const elecs = S.accounts.filter(a => a.kind === 'electronique' && a.active && mine(a));
-    const four = S.accounts.filter(a => a.kind === 'fournisseur' && a.active);
+    const four = S.accounts.filter(a => a.kind === 'fournisseur' && a.active && !a.is_cards);
     const payers = S.accounts.filter(a => a.active && mine(a) && ['coffre', 'caisse', 'banque', 'electronique'].includes(a.kind) && (a.kind !== 'caisse' || isDir() || a.agent_id === S.me.id));
     const grp = (t, list, sel) => list.length ? `<optgroup label="${esc(t)}">${list.map(a => `<option value="${a.id}" ${a.id === Number(sel) ? 'selected' : ''}>${esc(label(a))}</option>`).join('')}</optgroup>` : '';
     if (!gtps.length && !elecs.length) return toast('Aucun compte de votre agence à approvisionner.', 'bad');
@@ -1848,7 +1876,7 @@
           <button type="button" class="chip" data-chip="mode" data-v="ext">Argent extérieur</button></div></div>
         <div id="srcbox">${field('Argent pris dans', `<select class="input" name="src">${options(payers.map(a => [a.id, label(a)]), (payers.find(a => a.kind === 'coffre') || {}).id || '')}</select>`)}</div>
         <p class="small muted" id="payhelp"></p>
-        ${field('Détails', '<input class="input" name="details" placeholder="ex. versement GTCO du jour, achat de float Mixx…" autocomplete="off">')}`,
+        ${field('Détails', '<input class="input" name="details" placeholder="ex. versement GTCO du jour, achat de solde électronique Mixx…" autocomplete="off">')}`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
         const fsel = c.q('[name=four]');
@@ -1877,80 +1905,590 @@
     });
   }
 
-  // ---------------------------------------------------------------- fournisseurs
-  async function vFournisseurs(m) {
-    const list = await rpc('list_fournisseurs');
-    const tot = list.reduce((s, f) => s + Math.max(Number(f.du), 0), 0);
+  // ---------------------------------------------------------------- partenaires et fournisseurs
+  // Position : solde positif = le partenaire nous doit ; négatif = nous lui devons. Calculée par la base.
+  const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+  function posText(b) {
+    b = Number(b) || 0;
+    if (Math.abs(b) < 1) return { t: 'Compte équilibré', amt: 0, cls: '' };
+    return b > 0 ? { t: 'Le partenaire nous doit', amt: b, cls: 'pos' } : { t: 'Nous devons au partenaire', amt: -b, cls: 'neg' };
+  }
+  const posLine = b => { const x = posText(b); return `${x.t}${x.amt ? ' : ' + fmt(x.amt) : ''}`; };
+  const lcFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
+  const posMsg = r => r.dossier && ['cartes'].includes(r.dossier.type) && r.cards_position != null ? `Achats de cartes : ${lcFirst(posLine(r.cards_position))}.` : `Position : ${lcFirst(posLine(r.position))}.`;
+  const D_STATUS = { en_attente: ['En attente', 'amber'], en_cours: ['En cours', 'amber'], partiel: ['Partiel', 'amber'], termine: ['Terminé', 'green'],
+    reussie: ['Réussie', 'green'], echouee: ['Échouée', 'red'], annulee: ['Annulée', 'red'], rembourse: ['Remboursé', ''] };
+  const dTag = s => { const x = D_STATUS[s] || [s, '']; return `<span class="tag ${x[1]}">${esc(x[0])}</span>`; };
+  const D_TYPES = [
+    ['recharge', 'Recharge Ecobank / BNI', 'card', 'Le partenaire recharge la carte de notre client'],
+    ['paiement', 'Payer un bénéficiaire', 'out', 'Nous payons quelqu’un au Togo pour le partenaire'],
+    ['transfert_in', 'Transfert reçu par le partenaire', 'in', 'Wave, Orange Money, MTN : le partenaire reçoit, nous payons'],
+    ['transfert_out', 'Transfert reçu par AYAEL', 'swap', 'Nous recevons les fonds, le partenaire paie de son côté'],
+    ['appro', 'Approvisionnement UBA / GTCO', 'truck', 'Demande d’alimentation de nos comptes de recharge'],
+    ['virement', 'Virement au partenaire', 'bank', 'Argent envoyé au partenaire (avance ou règlement)'],
+    ['cartes', 'Commande de cartes', 'tag', 'Achat de cartes physiques'],
+    ['ouverture', 'Solde d’ouverture', 'adjust', 'Position de départ avec ce partenaire, justifiée'],
+  ];
+  const AGENT_TYPES = ['recharge', 'paiement', 'transfert_in', 'transfert_out'];
+  const dTypeName = t => (D_TYPES.find(x => x[0] === t) || [t, t])[1];
+  // Comptes depuis lesquels je peux payer / encaisser.
+  const cashAccounts = () => S.accounts.filter(a => a.active && ((a.kind === 'caisse' && a.agent_id === S.me.id)
+    || (isMgr() && mine(a) && ['coffre', 'banque', 'electronique'].includes(a.kind))));
+  const cashOpts = sel => options(cashAccounts().map(a => [a.id, balLabel(a)]), sel || S.me.caisse_id);
+  const fundAccounts = () => S.accounts.filter(a => a.active && mine(a) && ['coffre', 'banque', 'electronique', 'caisse'].includes(a.kind)
+    && (a.kind !== 'caisse' || isDir() || a.agent_id === S.me.id));
+  const fundOpts = () => options(fundAccounts().map(a => [a.id, balLabel(a)]), (fundAccounts().find(a => a.kind === 'banque') || fundAccounts().find(a => a.kind === 'coffre') || {}).id || '');
+
+  function dossierRow(d) {
+    const who = d.client || d.beneficiary || d.donneur || '';
+    const main = d.type === 'appro' ? d.lines.map(l => (acc(l.account_id) || {}).name).filter(Boolean).join(' + ')
+      : d.type === 'cartes' ? `${d.lines.reduce((s, l) => s + Number(l.qty), 0)} carte(s)` : who;
+    return `<button class="row" data-dossier="${d.id}"><div class="ico neu">${icon((D_TYPES.find(x => x[0] === d.type) || [])[2] || 'list')}</div>
+      <div class="main"><div class="t">${esc(dTypeName(d.type))} · ${esc(main || '')}</div>
+        <div class="s">${esc([d.ref, d.partenaire, d.service, d.card_ref_masked, fmtDate(isoDay(new Date(d.created_at)))].filter(Boolean).join(' · '))}</div></div>
+      <div class="end"><div class="amt num">${fmt(Math.abs(d.amount))}</div>${dTag(d.status)}</div></button>`;
+  }
+  const bindDossiers = (root, after) => root.querySelectorAll('[data-dossier]').forEach(b => b.onclick = () => sheetDossier(Number(b.dataset.dossier), after));
+
+  // Écran principal : liste des partenaires et fournisseurs.
+  async function vPartenaires(m) {
+    const [list, stock] = await Promise.all([rpc('list_partenaires'), rpc('list_stock')]);
+    S.partenaires = list;
+    const owe = list.reduce((s, p) => s + Math.max(Number(p.position), 0), 0);
+    const due = list.reduce((s, p) => s + Math.max(-Number(p.position), 0) + Math.max(-Number(p.cards_position || 0), 0), 0);
+    const pend = list.reduce((s, p) => s + Number(p.pending_n || 0), 0);
     m.innerHTML = `
-      <div class="alert info"><span>Vos fournisseurs de float (Mixx, Moov Money…), de crédit de communication, de forfaits… Un achat se fait avec <b>Approvisionner un compte</b> (à crédit ou payé). Ce que vous leur devez se met à jour tout seul.</span></div>
-      ${list.length ? `<div class="kpis" style="grid-template-columns:1fr"><div class="kpi"><div class="label">Total dû aux fournisseurs</div><div class="value num ${tot > 0 ? 'warn' : ''}">${fmt(tot)}</div></div></div>` : ''}
-      <div class="list">${list.length ? list.map(f => `<button class="row" data-four="${f.id}">
-          <div class="ico neu">${icon('truck')}</div>
-          <div class="main"><div class="t">${esc(f.name)} ${f.active ? '' : '<span class="tag">inactif</span>'}</div>
-            <div class="s">${esc([f.phone, `achats du mois ${fmt(f.achats_mois)}`, f.last_at ? 'dernière opération ' + ago(f.last_at) : ''].filter(Boolean).join(' · '))}</div></div>
-          <div class="end"><div class="amt num ${f.du > 0 ? 'warn' : f.du < 0 ? 'pos' : ''}">${f.du > 0 ? fmt(f.du) : f.du < 0 ? 'avance ' + fmt(-f.du) : 'à jour'}</div></div></button>`).join('')
-        : '<div class="empty">Aucun fournisseur pour le moment.</div>'}</div>
-      <button class="btn block" id="newf" style="margin-top:12px">${icon('plus')} Nouveau fournisseur</button>`;
-    S.fours = new Map(list.map(f => [f.id, f]));
-    m.querySelectorAll('[data-four]').forEach(b => b.onclick = () => sheetFournisseur(S.fours.get(Number(b.dataset.four))));
-    m.querySelector('#newf').onclick = () => sheetFournisseurEdit(null);
+      <div class="kpis">
+        <div class="kpi"><div class="label">Nos partenaires nous doivent</div><div class="value num pos">${fmt(owe)}</div></div>
+        <div class="kpi"><div class="label">Nous devons à nos partenaires</div><div class="value num ${due ? 'neg' : ''}">${fmt(due)}</div></div>
+        <div class="kpi"><div class="label">Opérations en attente</div><div class="value num">${pend}</div><div class="sub"><a href="#/dossiers">voir la liste</a></div></div>
+        <div class="kpi"><div class="label">Cartes en stock</div><div class="value num">${stock.reduce((s, x) => s + Number(x.stock), 0)}</div><div class="sub"><a href="#/stock">stock de cartes</a></div></div>
+      </div>
+      <div class="list">${list.length ? list.map(p => {
+          const x = posText(p.position);
+          return `<button class="row" data-part="${p.id}"><div class="ico rc">${esc(initials(p.name))}</div>
+            <div class="main"><div class="t">${esc(p.name)} ${p.active ? '' : '<span class="tag">inactif</span>'} ${p.pending_n ? `<span class="tag amber">${p.pending_n} en attente</span>` : ''}</div>
+              <div class="s">${esc([p.country, x.t + (x.amt ? ' ' + fmt(x.amt) : ''), p.cards_position != null && Number(p.cards_position) ? 'cartes : ' + lcFirst(posLine(p.cards_position)) : ''].filter(Boolean).join(' · '))}</div></div>
+            <div class="end"><div class="amt num ${x.cls}">${x.amt ? (x.cls === 'pos' ? '+' : '−') + fmt(x.amt) : 'à jour'}</div></div></button>`;
+        }).join('') : '<div class="empty">Aucun partenaire pour le moment.</div>'}</div>
+      ${can('fournisseurs') ? `<button class="btn block" id="newp" style="margin-top:12px">${icon('plus')} Nouveau partenaire ou fournisseur</button>` : ''}`;
+    m.querySelectorAll('[data-part]').forEach(b => b.onclick = () => sheetPartenaire(Number(b.dataset.part)));
+    const nb = m.querySelector('#newp'); if (nb) nb.onclick = () => sheetPartenaireEdit(null);
   }
 
-  async function sheetFournisseur(f) {
-    const hist = await rpc('list_operations', { fournisseur_id: f.id, from: '2000-01-01', limit: 60, agence_id: null });
-    sheet({
-      title: f.name, wide: true,
-      body: `<div class="hero" style="margin-bottom:14px"><div class="label">${f.du > 0 ? 'Nous lui devons' : f.du < 0 ? 'Nous avons payé d’avance' : 'Compte à jour'}</div><div class="big num">${fmt(Math.abs(f.du))}</div>
-          <div class="sub">${esc([f.phone, f.note].filter(Boolean).join(' · '))}</div></div>
-        ${section('Historique (achats et paiements)', opList(hist, true, 'Aucune opération.'))}`,
-      foot: `<button class="btn" data-x="edit">Modifier</button><button class="btn" data-x="buy">${icon('truck')} Acheter</button><button class="btn primary" data-x="pay">${icon('out')} Payer</button>`,
+  // Fiche d'un partenaire : position, en attente, cartes, historique, actions.
+  async function sheetPartenaire(id) {
+    const p = await rpc('get_partenaire', { id });
+    const x = posText(p.position);
+    const types = D_TYPES.filter(t => p.can_manage || AGENT_TYPES.includes(t[0]));
+    const scope = p.cartes_compensees ? 'Comprend toutes les opérations confirmées, y compris les achats de cartes.'
+      : 'Opérations financières confirmées (approvisionnements, recharges, paiements, transferts, virements). Les achats de cartes sont suivis à part.';
+    const kv = [['Pays', p.country], ['Interlocuteurs', p.contacts], ['Produits et services', p.products], ['Coordonnées bancaires', p.bank_details],
+      ['Mobile money', p.momo], ['Conditions (prix, frais, commissions)', p.conditions], ['Conditions de paiement', p.payment_terms], ['Note', p.note]].filter(r => r[1]);
+    const c = sheet({
+      title: p.name, wide: true,
+      body: `<div class="cols"><div>
+          <div class="hero" style="margin-bottom:10px"><div class="label">${esc(x.t)}</div><div class="big num">${fmt(x.amt)}</div>
+            <div class="sub">${esc(scope)}</div></div>
+          ${p.cards_position != null ? `<div class="alert ${Number(p.cards_position) < 0 ? 'warn' : 'info'}"><span><b>Achats de cartes :</b> ${esc(posLine(p.cards_position))}</span></div>` : ''}
+          <div class="section"><h2><span>Nouvelle opération</span></h2><div class="actions two">${types.map(t => `<button class="action" data-new="${t[0]}">${icon(t[2])}${esc(t[1])}</button>`).join('')}</div></div>
+          ${kv.length ? section('Fiche', `<dl class="kv">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd style="white-space:pre-line">${esc(v)}</dd>`).join('')}</dl>`) : ''}
+        </div><div>
+          ${section('En attente', p.pending.length ? `<div class="list">${p.pending.map(dossierRow).join('')}</div>` : '<div class="list"><div class="empty">Aucune opération en attente.</div></div>')}
+          ${p.cartes.length ? section('Commandes de cartes', `<div class="list">${p.cartes.map(dossierRow).join('')}</div>`) : ''}
+          ${section('Historique', p.recent.length ? `<div class="list">${p.recent.map(dossierRow).join('')}</div>` : '<div class="list"><div class="empty">Aucune opération.</div></div>')}
+        </div></div>`,
+      foot: `${p.can_manage ? `<button class="btn" data-x="edit">Modifier la fiche</button><button class="btn" data-x="releve">${icon('list')} Relevé</button>` : ''}`,
       onMount(c) {
-        c.q('[data-x=edit]').onclick = () => { c.close(); sheetFournisseurEdit(f); };
-        c.q('[data-x=buy]').onclick = () => { c.close(); sheetAppro({ fournisseurId: f.id }); };
-        c.q('[data-x=pay]').onclick = () => { c.close(); sheetPayerFournisseur(f.id); };
+        const reopen = () => { c.close(); sheetPartenaire(id); };
+        c.qa('[data-new]').forEach(b => b.onclick = () => { c.close(); sheetNewDossier(b.dataset.new, p, () => sheetPartenaire(id)); });
+        bindDossiers(c.el, () => sheetPartenaire(id));
+        c.qa('[data-dossier]').forEach(b => b.addEventListener('click', () => c.close()));
+        const e = c.q('[data-x=edit]'); if (e) e.onclick = () => { c.close(); sheetPartenaireEdit(p, reopen); };
+        const r = c.q('[data-x=releve]'); if (r) r.onclick = () => sheetReleve(p);
       },
     });
+    return c;
   }
 
-  function sheetFournisseurEdit(f) {
+  function sheetPartenaireEdit(p, then) {
+    const x = p || { cartes_compensees: true, active: true };
+    const ta = (n, ph) => `<textarea class="input" name="${n}" rows="2" placeholder="${esc(ph || '')}">${esc(x[n] || '')}</textarea>`;
     sheet({
-      title: f ? 'Modifier le fournisseur' : 'Nouveau fournisseur',
-      body: `${field('Nom', `<input class="input autofocus" name="name" value="${esc(f ? f.name : '')}" placeholder="ex. Moov Distribution, grossiste crédit…">`)}
-        ${field('Téléphone', `<input class="input" name="phone" inputmode="tel" value="${esc(f ? f.phone || '' : '')}">`)}
-        ${field('Note', `<input class="input" name="note" value="${esc(f ? f.note || '' : '')}" placeholder="ce qu’il nous vend, conditions…">`)}
-        ${f ? `<label class="check"><input type="checkbox" name="active" ${f.active ? 'checked' : ''}> Fournisseur actif</label>` : ''}`,
+      title: p ? 'Modifier la fiche' : 'Nouveau partenaire ou fournisseur', wide: true,
+      body: `<div class="grid2">${field('Nom', `<input class="input autofocus" name="name" value="${esc(x.name || '')}">`)}
+          ${field('Pays', `<input class="input" name="country" value="${esc(x.country || '')}" placeholder="Togo, Côte d’Ivoire…">`)}</div>
+        ${field('Interlocuteurs et coordonnées', ta('contacts', 'Nom, téléphone, e-mail…'))}
+        ${field('Produits et services fournis', ta('products', 'Cartes, alimentation UBA / GTCO, recharges Ecobank…'))}
+        <div class="grid2">${field('Coordonnées bancaires', ta('bank_details'))}${field('Numéros mobile money', ta('momo'))}</div>
+        <div class="grid2">${field('Conditions commerciales (prix, frais, commissions)', ta('conditions'))}${field('Conditions de paiement', ta('payment_terms'))}</div>
+        ${field('Note', ta('note'))}
+        <label class="check"><input type="checkbox" name="cartes_compensees" ${x.cartes_compensees ? 'checked' : ''}> Les achats de cartes entrent dans le même solde (compensation)</label>
+        <p class="small muted" style="margin:-4px 0 10px 32px">Décochez si, selon votre accord, les dettes de cartes se paient à part.</p>
+        ${p ? `<label class="check"><input type="checkbox" name="active" ${x.active ? 'checked' : ''}> Partenaire actif</label>` : ''}`,
       foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
       onMount(c) {
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
-          const p = { id: f ? f.id : null, name: c.q('[name=name]').value, phone: c.q('[name=phone]').value, note: c.q('[name=note]').value };
-          if (c.q('[name=active]')) p.active = c.q('[name=active]').checked;
-          await rpc('save_fournisseur', p);
-          c.close(); toast('Fournisseur enregistré.', 'ok'); await loadBoot(); route();
+          const v = { id: p ? p.id : null };
+          ['name', 'country', 'contacts', 'products', 'bank_details', 'momo', 'conditions', 'payment_terms', 'note'].forEach(k => { v[k] = c.q(`[name=${k}]`).value; });
+          v.cartes_compensees = c.q('[name=cartes_compensees]').checked;
+          if (c.q('[name=active]')) v.active = c.q('[name=active]').checked;
+          const r = await rpc('save_partenaire', v);
+          c.close(); toast('Fiche enregistrée.', 'ok'); await loadBoot(); refreshNow();
+          if (then) then(); else sheetPartenaire(r.id);
         });
       },
     });
   }
 
-  async function sheetPayerFournisseur(fid) {
-    const list = (await rpc('list_fournisseurs')).filter(f => f.active);
-    if (!list.length) return toast('Aucun fournisseur. Créez-le d’abord dans « Fournisseurs ».', 'bad');
-    const payers = S.accounts.filter(a => a.active && mine(a) && ['coffre', 'caisse', 'banque', 'electronique'].includes(a.kind) && (a.kind !== 'caisse' || isDir() || a.agent_id === S.me.id));
-    const cur = list.find(f => f.id === Number(fid)) || list.find(f => f.du > 0) || list[0];
+  // Petit sélecteur de client (recherche par nom, téléphone, carte).
+  function clientPicker(c, box, onPick) {
+    box.innerHTML = `<div class="combo"><div class="search" style="margin:0">${icon('search')}<input class="input" placeholder="Nom, téléphone ou n° de carte" autocomplete="off"></div>
+      <div class="drop hidden" role="listbox"></div></div><div class="small muted" style="margin-top:4px" data-picked></div>`;
+    const inp = box.querySelector('input'), drop = box.querySelector('.drop'), picked = box.querySelector('[data-picked]');
+    let sel = null;
+    const run = debounce(async () => {
+      const q = inp.value.trim(); sel = null; onPick(null, q); picked.textContent = q ? 'Client non enregistré : le nom tapé sera utilisé.' : '';
+      if (!q) { drop.classList.add('hidden'); return; }
+      const res = await rpc('search_clients', { q, limit: 6 });
+      drop.innerHTML = res.map((x, i) => `<button type="button" class="opt" data-i="${i}"><div class="t">${esc(x.name)}</div><div class="s">${esc([x.phone, ...activeCards(x).map(k => k.bank + ' ' + k.card_number)].filter(Boolean).join(' · '))}</div></button>`).join('');
+      drop.classList.toggle('hidden', !res.length);
+      drop.querySelectorAll('.opt').forEach(b => b.onmousedown = ev => {
+        ev.preventDefault(); sel = res[Number(b.dataset.i)]; inp.value = sel.name; drop.classList.add('hidden');
+        picked.textContent = sel.phone ? 'Tél. ' + sel.phone : ''; onPick(sel, sel.name);
+      });
+    }, 220);
+    inp.addEventListener('input', run);
+    inp.addEventListener('blur', () => setTimeout(() => drop.classList.add('hidden'), 150));
+    return () => sel;
+  }
+
+  // Nouvelle opération avec un partenaire (formulaire selon le type).
+  async function sheetNewDossier(type, p, then) {
+    if (!p) {
+      const list = (S.partenaires && S.partenaires.length ? S.partenaires : await rpc('list_partenaires')).filter(x => x.active);
+      if (!list.length) return toast('Aucun partenaire. Demandez à la direction de le créer.', 'bad');
+      if (list.length > 1) {
+        return sheet({
+          title: 'Choisir le partenaire',
+          body: `<div class="list">${list.map(x => `<button class="row" data-pp="${x.id}"><div class="ico rc">${esc(initials(x.name))}</div><div class="main"><div class="t">${esc(x.name)}</div><div class="s">${esc(x.country || '')}</div></div>${icon('chev')}</button>`).join('')}</div>`,
+          onMount(c) { c.qa('[data-pp]').forEach(b => b.onclick = () => { c.close(); sheetNewDossier(type, list.find(x => x.id === Number(b.dataset.pp)), then); }); },
+        });
+      }
+      p = list[0];
+    }
+    const gtps = S.accounts.filter(a => a.active && ['gtp', 'electronique'].includes(a.kind) && (a.kind === 'gtp' || /UBA|GTCO|ECOBANK|BNI/i.test(a.name)));
+    const today = todayIso();
+    let body = '', client = null, clientName = '';
+    const fees = `<div class="grid2">${field('Frais', moneyInput('fees'))}${field('Frais payés par', `<select class="input" name="fees_to">${options([['client', 'Le client'], ['ayael', 'AYAEL'], ['partenaire', 'Le partenaire']], 'client')}</select>`)}</div>`;
+    const ref = field('Référence (facultatif)', '<input class="input" name="reference" autocomplete="off" placeholder="N° de transaction, MTCN, référence du partenaire…">');
+    const det = field('Détails', '<input class="input" name="details" autocomplete="off">');
+    if (type === 'recharge') {
+      body = `<div class="field"><span>Client</span><div id="pcl"></div></div>
+        <div class="field"><span>Banque de la carte</span><div class="chips wrap">${['Ecobank', 'BNI', 'Autre'].map((s, i) => `<button type="button" class="chip ${i ? '' : 'on'}" data-chip="svc" data-v="${s}">${s}</button>`).join('')}</div></div>
+        ${field('Référence de la carte', '<input class="input" name="card_ref" autocomplete="off" inputmode="numeric">', 'Affichée masquée. Ne notez jamais le code PIN.')}
+        <div class="grid2">${field('Montant à recharger', moneyInput('amount', 'autofocus'))}${field('Montant facturé au client', moneyInput('billed'))}</div>
+        <div class="grid2">${field('Montant dû au partenaire', moneyInput('due_partner'), 'Montant qu’il recharge, plus ses frais éventuels.')}<div class="field"><span>Notre commission</span><div class="change num" id="pcom">—</div></div></div>
+        <div class="avbox"><label class="check"><input type="checkbox" name="paynow" checked> Le client paie maintenant</label>
+          <div id="pnow">${field('Encaissé sur', `<select class="input" name="acc">${cashOpts()}</select>`)}</div></div>${ref}`;
+    } else if (type === 'paiement') {
+      body = `<div class="grid2">${field('Bénéficiaire', '<input class="input autofocus" name="beneficiary" autocomplete="off">')}${field('Téléphone', '<input class="input" name="beneficiary_phone" inputmode="tel">')}</div>
+        <div class="grid2">${field('Montant à payer', moneyInput('amount'))}${field('Commission AYAEL (facultatif)', moneyInput('commission'))}</div>
+        <div class="small muted" id="prec" style="margin:-6px 0 12px"></div>
+        <div class="avbox"><label class="check"><input type="checkbox" name="paynow"> Payé maintenant</label>
+          <div id="pnow" class="hidden">${field('Payé depuis', `<select class="input" name="acc">${cashOpts()}</select>`)}</div></div>${ref}${det}`;
+    } else if (type === 'transfert_in' || type === 'transfert_out') {
+      const tin = type === 'transfert_in';
+      body = `<div class="alert info"><span>${tin ? 'Le client envoie l’argent sur le numéro du <b>partenaire</b> ; AYAEL remet l’argent au bénéficiaire au Togo.' : 'AYAEL reçoit l’argent du client ; le <b>partenaire</b> paie le bénéficiaire de son côté.'}</span></div>
+        <div class="field"><span>Service</span><div class="chips wrap">${['Wave', 'Orange Money', 'MTN', 'Moov', 'Autre'].map((s, i) => `<button type="button" class="chip ${i ? '' : 'on'}" data-chip="svc" data-v="${s}">${s}</button>`).join('')}</div></div>
+        <div class="grid2">${field('Donneur d’ordre (expéditeur)', '<input class="input autofocus" name="donneur" autocomplete="off">')}${field('Bénéficiaire', '<input class="input" name="beneficiary" autocomplete="off">')}</div>
+        ${field('Téléphone du bénéficiaire', '<input class="input" name="beneficiary_phone" inputmode="tel">')}
+        <div class="grid2">${field(tin ? 'Montant à payer au bénéficiaire' : 'Montant reçu du client', moneyInput('amount'))}
+          ${field(tin ? 'Montant à récupérer auprès du partenaire' : 'Montant dû au partenaire', moneyInput(tin ? 'to_recover' : 'due_partner'), tin ? 'Montant payé + notre commission éventuelle.' : 'Ce qu’il paie au bénéficiaire, plus ses frais éventuels.')}</div>
+        <div class="avbox"><label class="check"><input type="checkbox" name="paynow"> ${tin ? 'Payé au bénéficiaire maintenant' : 'Argent reçu maintenant'}</label>
+          <div id="pnow" class="hidden">${field(tin ? 'Payé depuis' : 'Encaissé sur', `<select class="input" name="acc">${cashOpts()}</select>`)}</div></div>${ref}${det}`;
+    } else if (type === 'appro') {
+      body = `<p class="small muted" style="margin-top:0">Une demande ne change aucun solde. Chaque alimentation reçue se confirme ensuite dans le dossier.</p>
+        ${gtps.map(a => `<div class="grid2" style="align-items:end">${field(esc(a.name), moneyInput('l' + a.id), 'Solde actuel : ' + fmt(S.bal.get(a.id) ?? 0))}<div></div></div>`).join('')}
+        <div class="avbox"><label class="check"><input type="checkbox" name="vir"> Nous envoyons aussi un virement au partenaire</label>
+          <div id="pvir" class="hidden"><div class="grid2">${field('Montant du virement', moneyInput('vir_amount'))}${field('Envoyé depuis', `<select class="input" name="vir_from">${fundOpts()}</select>`)}</div></div>
+          <p class="small muted" style="margin:6px 0 0">Si le partenaire nous doit déjà de l’argent, laissez décoché : l’alimentation sera déduite de sa dette.</p></div>${ref}${det}`;
+    } else if (type === 'virement') {
+      body = `<div class="grid2">${field('Montant', moneyInput('amount', 'autofocus'))}${field('Envoyé depuis', `<select class="input" name="from">${fundOpts()}</select>`)}</div>${ref}${det}
+        <p class="small muted">Le virement augmente notre avance chez le partenaire, ou réduit ce que nous lui devons.</p>`;
+    } else if (type === 'cartes') {
+      const cts = (await rpc('list_stock')).filter(t => t.active);
+      if (!cts.length) return toast('Créez d’abord les types de cartes dans « Stock de cartes ».', 'bad');
+      body = `<div class="dtable scrollx"><table><thead><tr><th>Type de carte</th><th class="r">Quantité</th><th class="r">Prix d’achat unitaire</th></tr></thead><tbody>
+          ${cts.map(t => `<tr><td>${esc(t.name)}<div class="sub">stock : ${t.stock}</div></td><td class="r"><input class="input" name="q${t.id}" inputmode="numeric" style="width:80px;text-align:right"></td>
+            <td class="r">${moneyInput('u' + t.id, `value="${t.last_cost ? fmtN(t.last_cost) : ''}" style="width:120px;text-align:right"`)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="vtotal" style="margin-top:12px"><span>Montant total</span><span class="num" id="ptot">0 F</span></div>
+        <div class="grid2">${field('N° de facture fournisseur', '<input class="input" name="invoice_ref" autocomplete="off">')}${field('Montant de la facture', moneyInput('invoice_amount'))}</div>
+        <div class="avbox"><label class="check"><input type="checkbox" name="paynow"> Payé à la commande (tout ou partie)</label>
+          <div id="pnow" class="hidden"><div class="grid2">${field('Montant payé', moneyInput('paid_now'))}${field('Payé depuis', `<select class="input" name="from">${fundOpts()}</select>`)}</div></div></div>${det}`;
+      S._cts = cts;
+    } else if (type === 'ouverture') {
+      body = `<div class="field"><span>Au départ</span><div class="chips wrap"><button type="button" class="chip on" data-chip="sens" data-v="1">Le partenaire nous doit</button><button type="button" class="chip" data-chip="sens" data-v="-1">Nous lui devons</button></div></div>
+        ${field('Montant', moneyInput('amount', 'autofocus'))}
+        ${p.cards_account_id ? `<div class="field"><span>Concerne</span><div class="chips wrap"><button type="button" class="chip on" data-chip="scope" data-v="financier">Opérations financières</button><button type="button" class="chip" data-chip="scope" data-v="cartes">Achats de cartes</button></div></div>` : ''}
+        ${field('Justification (obligatoire)', '<input class="input" name="details" autocomplete="off" placeholder="ex. point fait avec M. Koné le 20/10, relevé n°…">')}`;
+    }
     sheet({
-      title: 'Payer un fournisseur',
-      body: `${field('Fournisseur', `<select class="input" name="f">${options(list.map(f => [f.id, `${f.name}${f.du > 0 ? ' (dû ' + fmtN(f.du) + ' F)' : ''}`]), cur.id)}</select>`)}
-        ${field('Montant payé', moneyInput('amount', `autofocus value="${cur.du > 0 ? fmtN(cur.du) : ''}"`))}
-        ${field('Payé avec', `<select class="input" name="from">${options(payers.map(a => [a.id, balLabel(a)]), (payers.find(a => a.kind === 'coffre') || {}).id || '')}</select>`)}
-        ${field('Détails', '<input class="input" name="details" autocomplete="off" placeholder="ex. règlement facture du 20/10">')}`,
-      foot: '<button class="btn primary" data-x="ok">Enregistrer le paiement</button>',
+      title: `${dTypeName(type)} · ${p.name}`, wide: ['appro', 'cartes', 'recharge', 'transfert_in', 'transfert_out'].includes(type),
+      body,
+      foot: `<button class="btn primary" data-x="ok">Enregistrer</button>`,
       onMount(c) {
-        c.q('[name=f]').onchange = e => { const f = list.find(x => x.id === Number(e.target.value)); c.q('[name=amount]').value = f && f.du > 0 ? fmtN(f.du) : ''; };
+        const val = n => { const el = c.q(`[name=${n}]`); return el ? el.value : null; };
+        const amt = n => parseAmt(val(n));
+        ['svc', 'sens', 'scope'].forEach(n => chipGroup(c, n));
+        const tg = (chk, box) => { const ch = c.q(`[name=${chk}]`), bx = c.q(box); if (ch && bx) ch.onchange = () => bx.classList.toggle('hidden', !ch.checked); };
+        tg('paynow', '#pnow'); tg('vir', '#pvir');
+        if (type === 'recharge') {
+          clientPicker(c, c.q('#pcl'), (cl, name) => { client = cl; clientName = name; });
+          const upd = () => {
+            const a = amt('amount') || 0;
+            if (!c.q('[name=billed]').dataset.edited) c.q('[name=billed]').value = a ? fmtN(a) : '';
+            if (!c.q('[name=due_partner]').dataset.edited) c.q('[name=due_partner]').value = a ? fmtN(a) : '';
+            const com = (amt('billed') || 0) - (amt('due_partner') || 0);
+            c.q('#pcom').textContent = fmt(com); c.q('#pcom').className = 'change num ' + (com < 0 ? 'neg' : 'pos');
+          };
+          c.q('[name=amount]').addEventListener('input', upd);
+          ['billed', 'due_partner'].forEach(n => c.q(`[name=${n}]`).addEventListener('input', e => { e.target.dataset.edited = '1'; upd(); }));
+        }
+        if (type === 'paiement') {
+          const upd = () => { const a = amt('amount') || 0, k = amt('commission') || 0; c.q('#prec').textContent = a ? `À récupérer auprès du partenaire : ${fmt(a + k)}` : ''; };
+          ['amount', 'commission'].forEach(n => c.q(`[name=${n}]`).addEventListener('input', upd));
+        }
+        if (type === 'transfert_in' || type === 'transfert_out') {
+          const other = type === 'transfert_in' ? 'to_recover' : 'due_partner';
+          c.q('[name=amount]').addEventListener('input', () => { const o = c.q(`[name=${other}]`); if (!o.dataset.edited) o.value = val('amount'); });
+          c.q(`[name=${other}]`).addEventListener('input', e => { e.target.dataset.edited = '1'; });
+        }
+        if (type === 'cartes') {
+          const upd = () => { c.q('#ptot').textContent = fmt(S._cts.reduce((s, t) => s + (parseInt(val('q' + t.id)) || 0) * (amt('u' + t.id) || 0), 0)); };
+          c.qa('input').forEach(i => i.addEventListener('input', upd));
+        }
         c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
-          const r = await rpc('op_paiement_fournisseur', { fournisseur_id: Number(c.q('[name=f]').value), from_id: Number(c.q('[name=from]').value),
-            amount: parseAmt(c.q('[name=amount]').value), details: c.q('[name=details]').value || null });
-          c.close(); toast(r.du > 0 ? `Paiement enregistré. Reste dû : ${fmt(r.du)}` : 'Paiement enregistré. Fournisseur à jour.', 'ok'); refreshNow();
+          const pl = { partenaire_id: p.id, type, idem_key: uid(), reference: val('reference'), details: val('details') };
+          const now = c.q('[name=paynow]') && c.q('[name=paynow]').checked;
+          let after = null;
+          if (type === 'recharge') {
+            Object.assign(pl, { client_id: client ? client.id : null, client_name: client ? null : clientName, service: chipVal(c, 'svc'), card_ref: val('card_ref'),
+              amount: amt('amount'), billed: amt('billed'), due_partner: amt('due_partner') });
+            if (now) Object.assign(pl, { encaisse: amt('billed') || amt('amount'), account_id: Number(val('acc')) });
+          } else if (type === 'paiement') {
+            Object.assign(pl, { beneficiary: val('beneficiary'), beneficiary_phone: val('beneficiary_phone'), amount: amt('amount'),
+              to_recover: (amt('amount') || 0) + (amt('commission') || 0) });
+            if (now) after = { action: 'paiement', account_id: Number(val('acc')) };
+          } else if (type === 'transfert_in' || type === 'transfert_out') {
+            Object.assign(pl, { service: chipVal(c, 'svc'), donneur: val('donneur'), beneficiary: val('beneficiary'), beneficiary_phone: val('beneficiary_phone'),
+              amount: amt('amount'), to_recover: amt('to_recover'), due_partner: amt('due_partner') });
+            if (now) { if (type === 'transfert_in') after = { action: 'paiement', account_id: Number(val('acc')) }; else Object.assign(pl, { encaisse: amt('amount'), account_id: Number(val('acc')) }); }
+          } else if (type === 'appro') {
+            pl.lines = gtps.map(a => ({ account_id: a.id, amount: amt('l' + a.id) })).filter(l => l.amount > 0);
+            if (c.q('[name=vir]').checked) after = { action: 'virement', amount: amt('vir_amount'), from_id: Number(val('vir_from')) };
+          } else if (type === 'virement') {
+            Object.assign(pl, { amount: amt('amount'), from_id: Number(val('from')) });
+          } else if (type === 'cartes') {
+            pl.lines = S._cts.map(t => ({ card_type_id: t.id, qty: parseInt(val('q' + t.id)) || 0, unit_price: amt('u' + t.id) || 0 })).filter(l => l.qty > 0);
+            Object.assign(pl, { invoice_ref: val('invoice_ref'), invoice_amount: amt('invoice_amount') });
+            if (now) Object.assign(pl, { paid_now: amt('paid_now'), from_id: Number(val('from')) });
+          } else if (type === 'ouverture') {
+            Object.assign(pl, { amount: (amt('amount') || 0) * Number(chipVal(c, 'sens')), scope: chipVal(c, 'scope') || 'financier' });
+          }
+          const r = await rpc('create_dossier', pl);
+          let d = r.dossier;
+          if (after) d = (await rpc('dossier_action', Object.assign({ dossier_id: d.id, idem_key: uid() }, after))).dossier;
+          c.close(); toast(`Enregistré : ${d.ref}.`, 'ok'); refreshNow();
+          sheetDossier(d.id, then);
         });
       },
+    });
+  }
+
+  // Détail d'un dossier avec les confirmations possibles.
+  async function sheetDossier(id, then) {
+    const d = await rpc('get_dossier', { id });
+    if (d.type === 'cartes' && !S._stock) S._stock = await rpc('list_stock');
+    const mgr = can('fournisseurs');
+    const open = !['annulee', 'echouee', 'rembourse'].includes(d.status);
+    const rows = [['Référence', d.ref], ['Partenaire', d.partenaire], ['Statut', null], ['Créé', `${fmtDT(d.created_at)} par ${d.created_by_name || '?'}${d.agence ? ' · ' + d.agence : ''}`],
+      d.client && ['Client', d.client], d.donneur && ['Donneur d’ordre', d.donneur], d.beneficiary && ['Bénéficiaire', d.beneficiary + (d.beneficiary_phone ? ' · ' + d.beneficiary_phone : '')],
+      d.service && ['Service', d.service], d.card_ref && ['Carte', null],
+      ['Montant', fmt(Math.abs(d.amount))], d.billed != null && ['Facturé au client', fmt(d.billed)],
+      ['recharge', 'transfert_out'].includes(d.type) && ['Encaissé', fmt(d.encaisse) + (Number(d.rembourse) ? ` (remboursé ${fmt(d.rembourse)})` : '')],
+      d.due_partner != null && ['Dû au partenaire', fmt(d.due_partner) + (d.type === 'recharge' && d.billed != null ? ` · commission ${fmt(d.billed - d.due_partner)}` : '')],
+      d.to_recover != null && ['À récupérer auprès du partenaire', fmt(d.to_recover)],
+      ['paiement', 'transfert_in'].includes(d.type) && ['Payé par AYAEL', d.paye ? fmt(d.paye) : 'pas encore'],
+      ['recharge', 'transfert_out'].includes(d.type) && ['Réalisé par le partenaire', d.execute || d.status === 'reussie' || d.status === 'termine' ? 'oui' : 'pas encore'],
+      d.info && d.info.recu_partenaire && ['Fonds reçus chez le partenaire', `${fmt(d.info.recu_partenaire.amount)} · ${fmtDT(d.info.recu_partenaire.at)} · ${d.info.recu_partenaire.by}`],
+      d.type === 'appro' && ['Alimenté', `${fmt(d.alimente)} sur ${fmt(d.amount)}`], d.type === 'appro' && Number(d.vire) && ['Virement envoyé', fmt(d.vire)],
+      d.type === 'cartes' && ['Reçu (valeur)', fmt(d.recu_cartes)], d.type === 'cartes' && ['Payé', fmt(d.vire)],
+      d.invoice_ref && ['Facture', `${d.invoice_ref}${d.invoice_amount ? ' · ' + fmt(d.invoice_amount) : ''}`],
+      d.reference && ['Référence externe', d.reference], d.details && ['Détails', d.details], d.cancel_reason && ['Motif', d.cancel_reason]].filter(Boolean);
+    const lines = d.type === 'appro' ? `<div class="list">${d.lines.map(l => { const a = acc(l.account_id) || {}, got = Number((d.alim_by_acc || {})[l.account_id] || 0);
+        return `<div class="row"><div class="ico rc">${esc((a.bank || a.name || '?').slice(0, 3))}</div><div class="main"><div class="t">${esc(a.name || '?')}</div>
+          <div class="s">demandé ${fmt(l.amount)} · reçu ${fmt(got)}${got < l.amount ? ' · reste ' + fmt(l.amount - got) : ''}</div></div>
+          ${mgr && open && d.status !== 'termine' && got < l.amount ? `<button class="btn small primary" data-alim="${l.account_id}" data-rest="${Math.max(l.amount - got, 0)}">Confirmer reçu</button>` : got >= l.amount ? '<span class="tag green">reçu</span>' : ''}</div>`; }).join('')}</div>`
+      : d.type === 'cartes' ? `<div class="list">${d.lines.map(l => { const t = l.card_type_id, got = Number((d.received || {})[t] || 0), name = ((S._stock || []).find(x => x.id === t) || {}).name || 'Cartes';
+        return `<div class="row"><div class="ico neu">${icon('tag')}</div><div class="main"><div class="t">${esc(name)}</div><div class="s">commandé ${l.qty} × ${fmt(l.unit_price)} · reçu ${got}${got < l.qty ? ' · reste ' + (l.qty - got) : ''}</div></div></div>`; }).join('')}</div>` : '';
+    const acts = [];
+    const A = (k, label, cls = '') => acts.push(`<button class="btn ${cls}" data-act="${k}">${label}</button>`);
+    if (open) {
+      if (d.type === 'recharge') {
+        if (Number(d.encaisse) < Number(d.billed ?? d.amount) && d.status !== 'reussie') A('encaissement', 'Encaisser le client');
+        if (mgr && d.status === 'en_attente') A('en_cours', 'Transmise au partenaire');
+        if (mgr && !['reussie'].includes(d.status)) { A('execution', 'Recharge réussie', 'primary'); A('echec', 'Échouée'); }
+      }
+      if (d.type === 'transfert_out') {
+        if (Number(d.encaisse) < Number(d.amount) && d.status !== 'termine') A('encaissement', 'Argent reçu du client');
+        if (mgr && d.status !== 'termine') { A('execution', 'Le partenaire a payé', 'primary'); A('echec', 'Échouée'); }
+      }
+      if (d.type === 'transfert_in' && mgr && !d.info.recu_partenaire && d.status !== 'termine') A('recu_partenaire', 'Fonds reçus chez le partenaire');
+      if (['paiement', 'transfert_in'].includes(d.type) && d.status !== 'termine') { A('paiement', 'Payer le bénéficiaire', 'primary'); if (mgr) A('echec', 'Échouée'); }
+      if (d.type === 'appro' && mgr && d.status !== 'termine') { A('virement', 'Virement au partenaire'); A('cloturer', 'Clôturer (reste annulé)'); }
+      if (d.type === 'cartes' && mgr) { if (d.status !== 'termine') A('reception', 'Réceptionner des cartes', 'primary'); A('paiement_cartes', 'Payer'); A('facture', 'Facture'); if (d.status !== 'termine') A('cloturer', 'Clôturer'); }
+      if (mgr) A('annuler', 'Annuler', 'danger');
+    }
+    if (['echouee'].includes(d.status) && Number(d.encaisse) > Number(d.rembourse)) A('rembourser', 'Rembourser le client', 'primary');
+    A('piece', `${icon('upload')} Justificatif`); A('reference', 'Référence');
+    const c = sheet({
+      title: `${dTypeName(d.type)} · ${d.ref}`, wide: true,
+      body: `<div class="cols"><div><dl class="kv">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${k === 'Statut' ? dTag(d.status) : k === 'Carte'
+          ? `<span id="cref">${esc(d.card_ref_masked || '')}</span>${mgr && d.card_ref && d.card_ref !== d.card_ref_masked ? ' <button class="btn small" type="button" id="showref">Afficher</button>' : ''}` : esc(v)}</dd>`).join('')}</dl>
+          ${lines ? section(d.type === 'appro' ? 'Comptes à alimenter' : 'Cartes commandées', lines) : ''}</div>
+        <div>${section('Justificatifs', d.pieces.length ? `<div class="list">${d.pieces.map(x => `<button class="row" data-piece="${x.id}"><div class="ico neu">${icon('receipt')}</div><div class="main"><div class="t">${esc(x.name || 'Pièce')}</div><div class="s">${fmtDT(x.created_at)}</div></div>${icon('chev')}</button>`).join('')}</div>` : '<div class="list"><div class="empty">Aucun justificatif.</div></div>')}
+          ${section('Mouvements enregistrés', d.ops.length ? `<div class="list">${d.ops.map(o => `<div class="row ${o.status !== 'ok' ? 'cancelled' : ''}"><div class="main"><div class="t">${esc(STAGES[o.stage] || o.stage)} · ${fmt(o.amount)}</div><div class="s">${esc([fmtDT(o.created_at), o.agent, o.account].filter(Boolean).join(' · '))}${o.status !== 'ok' ? ' · annulé' : ''}</div></div></div>`).join('')}</div>` : '<div class="list"><div class="empty">Rien n’est encore confirmé : aucun solde n’a changé.</div></div>')}</div></div>`,
+      foot: acts.join(''),
+      onMount(c) {
+        const reopen = () => { c.close(); refreshNow(); sheetDossier(id, then); };
+        const sr = c.q('#showref'); if (sr) sr.onclick = () => { c.q('#cref').textContent = d.card_ref; sr.remove(); };
+        c.qa('[data-piece]').forEach(b => b.onclick = () => openPiece(Number(b.dataset.piece)));
+        c.qa('[data-alim]').forEach(b => b.onclick = () => actForm(d, 'alimentation', 'Confirmer une alimentation reçue',
+          `${field('Compte', `<select class="input" name="account_id">${options(d.lines.map(l => [l.account_id, (acc(l.account_id) || {}).name]), b.dataset.alim)}</select>`)}
+           ${field('Montant reçu', moneyInput('amount', `autofocus value="${fmtN(b.dataset.rest)}"`))}
+           ${field('Référence', '<input class="input" name="reference" autocomplete="off">')}`, reopen));
+        c.qa('[data-act]').forEach(b => b.onclick = () => doAction(d, b.dataset.act, reopen));
+      },
+    });
+    S._dossierSheet = c;
+  }
+  const STAGES = { encaissement: 'Encaissement', execution: 'Réalisé par le partenaire', remboursement: 'Remboursement du client', paiement: 'Payé au bénéficiaire',
+    alimentation: 'Alimentation reçue', virement: 'Virement au partenaire', paiement_cartes: 'Paiement des cartes', reception: 'Réception de cartes', ouverture: 'Solde d’ouverture' };
+
+  // Petit formulaire de confirmation : chaque envoi porte une clé unique (une confirmation répétée ne compte qu'une fois).
+  function actForm(d, action, title, body, after, okLabel = 'Confirmer') {
+    const idem = uid();
+    sheet({
+      title, body,
+      foot: `<button class="btn primary" data-x="ok">${esc(okLabel)}</button>`,
+      onMount(c) {
+        c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          const pl = { dossier_id: d.id, action, idem_key: idem };
+          c.qa('input[name], select[name], textarea[name]').forEach(i => {
+            if (i.type === 'checkbox') pl[i.name] = i.checked;
+            else if (i.classList.contains('money')) pl[i.name] = parseAmt(i.value);
+            else if (/^q\d+$/.test(i.name)) { (pl.lines = pl.lines || []).push({ card_type_id: Number(i.name.slice(1)), qty: parseInt(i.value) || 0 }); }
+            else pl[i.name] = i.value;
+          });
+          const r = await rpc('dossier_action', pl);
+          c.close();
+          toast(r.duplicate ? 'Déjà confirmé : rien n’a été compté deux fois.' : `Enregistré. ${posMsg(r)}`, 'ok');
+          after && after();
+        });
+      },
+    });
+  }
+
+  async function doAction(d, act, after) {
+    const amtF = (label, v, help) => field(label, moneyInput('amount', `autofocus value="${v ? fmtN(v) : ''}"`), help || '');
+    const refF = field('Référence', '<input class="input" name="reference" autocomplete="off">');
+    switch (act) {
+      case 'encaissement': return actForm(d, act, 'Encaisser', `${amtF('Montant encaissé', (d.type === 'recharge' ? Number(d.billed ?? d.amount) : Number(d.amount)) - Number(d.encaisse))}
+        ${field('Encaissé sur', `<select class="input" name="account_id">${cashOpts()}</select>`)}`, after);
+      case 'execution': return actForm(d, act, d.type === 'recharge' ? 'Recharge réussie' : 'Le partenaire a payé le bénéficiaire',
+        `<p class="small muted" style="margin-top:0">Confirmez seulement avec une preuve du partenaire (message, capture, relevé).</p>
+        ${amtF('Montant dû au partenaire', d.due_partner ?? d.amount, 'Ce montant entre dans le compte du partenaire.')}${refF}`, after);
+      case 'paiement': return actForm(d, act, 'Payer le bénéficiaire', `${amtF('Montant remis au bénéficiaire', d.amount)}
+        ${field('À récupérer auprès du partenaire', moneyInput('to_recover', `value="${fmtN(d.to_recover ?? d.amount)}"`))}
+        ${field('Payé depuis', `<select class="input" name="account_id">${cashOpts()}</select>`)}${refF}`, after, 'Confirmer le paiement');
+      case 'recu_partenaire': return actForm(d, act, 'Fonds reçus chez le partenaire', `<p class="small muted" style="margin-top:0">Information seulement : aucun solde ne change.</p>${amtF('Montant reçu par le partenaire', d.amount)}${refF}`, after);
+      case 'rembourser': return actForm(d, act, 'Rembourser le client', `${amtF('Montant rendu', Number(d.encaisse) - Number(d.rembourse))}
+        ${field('Rendu depuis', `<select class="input" name="account_id">${cashOpts()}</select>`)}`, after);
+      case 'virement': case 'paiement_cartes': return actForm(d, act, act === 'virement' ? 'Virement au partenaire' : 'Payer les cartes',
+        `${amtF('Montant', act === 'paiement_cartes' ? Math.max(Number(d.recu_cartes || d.amount) - Number(d.vire), 0) : 0)}
+        ${field('Envoyé depuis', `<select class="input" name="from_id">${fundOpts()}</select>`)}${refF}`, after);
+      case 'reception': {
+        const st = S._stock || (S._stock = await rpc('list_stock'));
+        return actForm(d, act, 'Réceptionner des cartes', `<p class="small muted" style="margin-top:0">Les cartes reçues entrent en stock et la dette d’achat est enregistrée.</p>
+          ${d.lines.map(l => { const got = Number((d.received || {})[l.card_type_id] || 0); return field(`${esc((st.find(x => x.id === l.card_type_id) || {}).name || 'Cartes')} (reste ${l.qty - got})`,
+            `<input class="input" name="q${l.card_type_id}" inputmode="numeric" value="${l.qty - got}">`); }).join('')}`, after);
+      }
+      case 'facture': return actForm(d, act, 'Facture du fournisseur', `${field('N° de facture', `<input class="input" name="invoice_ref" value="${esc(d.invoice_ref || '')}">`)}
+        ${field('Montant', moneyInput('invoice_amount', `value="${d.invoice_amount ? fmtN(d.invoice_amount) : ''}"`))}`, after);
+      case 'reference': return actForm(d, act, 'Référence et détails', `${field('Référence externe', `<input class="input" name="reference" value="${esc(d.reference || '')}">`)}
+        ${field('Détails', `<input class="input" name="details" value="${esc(d.details || '')}">`)}`, after);
+      case 'piece': return addPiece(d, after);
+      case 'echec': case 'annuler': case 'cloturer': {
+        const reason = await askText(act === 'annuler' ? 'Annuler le dossier' : act === 'echec' ? 'Opération échouée' : 'Clôturer le dossier',
+          act === 'annuler' ? 'Motif (les effets déjà confirmés seront contre-passés)' : 'Motif', { okLabel: 'Confirmer', danger: act !== 'cloturer', required: act === 'annuler' });
+        if (reason === null) return;
+        try { const r = await rpc('dossier_action', { dossier_id: d.id, action: act, reason, idem_key: uid() }); toast(`Enregistré. ${posMsg(r)}`, 'ok'); after && after(); }
+        catch (e) { toast(e.message, 'bad'); }
+        return;
+      }
+      default: {
+        try { const r = await rpc('dossier_action', { dossier_id: d.id, action: act, idem_key: uid() }); toast(`Enregistré. ${posMsg(r)}`, 'ok'); after && after(); }
+        catch (e) { toast(e.message, 'bad'); }
+      }
+    }
+  }
+
+  // Justificatifs : photo (compressée) ou PDF.
+  function addPiece(d, after) {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*,application/pdf';
+    inp.onchange = async () => {
+      const f = inp.files[0]; if (!f) return;
+      try {
+        let data;
+        if (/^image\//.test(f.type)) {
+          const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(f); });
+          const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+          const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+          cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+          data = cv.toDataURL('image/jpeg', 0.75);
+        } else {
+          if (f.size > 2900000) throw new Error('PDF trop lourd (3 Mo maximum).');
+          data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+        }
+        await rpc('add_piece', { partner_op_id: d.id, name: f.name, mime: /^image\//.test(f.type) ? 'image/jpeg' : f.type, data });
+        toast('Justificatif ajouté.', 'ok'); after && after();
+      } catch (e) { toast(e.message || 'Fichier illisible.', 'bad'); }
+    };
+    inp.click();
+  }
+  async function openPiece(id) {
+    const r = await rpc('get_piece', { id });
+    const bin = atob(r.data.split(',')[1] || '');
+    const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    window.open(URL.createObjectURL(new Blob([u8], { type: r.mime || 'application/octet-stream' })), '_blank', 'noopener');
+  }
+
+  // Relevé : solde initial, mouvements, solde final ; export Excel et impression.
+  function sheetReleve(p) {
+    const [f0] = period('month');
+    sheet({
+      title: `Relevé · ${p.name}`, wide: true,
+      body: `<div class="filters"><input class="input" type="date" name="from" value="${f0}" aria-label="Du"><input class="input" type="date" name="to" value="${todayIso()}" aria-label="Au">
+          ${p.cards_account_id ? `<select class="input" name="scope">${options([['financier', 'Opérations financières'], ['cartes', 'Achats de cartes']], 'financier')}</select>` : ''}</div>
+        <div id="rel"><div class="spinner"></div></div>`,
+      foot: `<button class="btn" data-x="xls">${icon('download')} Excel</button><button class="btn primary" data-x="print">${icon('print')} Imprimer</button>`,
+      onMount(c) {
+        let R = null;
+        const sign = v => (v > 0 ? '+' : v < 0 ? '−' : '') + fmtN(Math.abs(v));
+        const load = async () => {
+          R = await rpc('releve_partenaire', { id: p.id, from: c.q('[name=from]').value, to: c.q('[name=to]').value, scope: c.q('[name=scope]') ? c.q('[name=scope]').value : 'financier' });
+          let run = Number(R.opening);
+          R.rows = R.lines.map(l => { run += Number(l.variation); return Object.assign({}, l, { solde: run }); });
+          c.q('#rel').innerHTML = `<p class="small muted" style="margin:0 0 8px">Solde positif : le partenaire nous doit · négatif : nous lui devons. Seules les opérations confirmées comptent.</p>
+            <div class="dtable scrollx"><table><thead><tr><th>Date</th><th>Réf.</th><th>Opération</th><th class="r">Variation</th><th class="r">Solde</th></tr></thead><tbody>
+              <tr><td>${fmtDate(R.from)}</td><td></td><td><b>Solde initial</b> — ${esc(posLine(R.opening))}</td><td></td><td class="r num">${sign(R.opening)}</td></tr>
+              ${R.rows.map(l => `<tr class="${l.reversal ? 'cancelled' : ''}"><td class="num">${fmtDate(isoDay(new Date(l.at)))}</td><td class="sub">${esc(l.ref || '')}</td>
+                <td>${esc((l.reversal ? 'Annulation · ' : '') + (l.details || ''))}<div class="sub">${esc(l.agent || '')}</div></td>
+                <td class="r num ${l.variation > 0 ? 'pos' : 'neg'}">${sign(l.variation)}</td><td class="r num">${sign(l.solde)}</td></tr>`).join('')}
+              <tr><td>${fmtDate(R.to)}</td><td></td><td><b>Solde final</b> — ${esc(posLine(R.closing))}</td><td></td><td class="r num"><b>${sign(R.closing)}</b></td></tr>
+            </tbody></table></div>`;
+        };
+        c.qa('[name=from],[name=to],[name=scope]').forEach(i => i.onchange = load);
+        load();
+        c.q('[data-x=xls]').onclick = e => busy(e.currentTarget, async () => {
+          await loadXLSX(); const XL = window.XLSX;
+          const rows = [{ Date: fmtDate(R.from), 'Référence': '', 'Opération': 'Solde initial', Variation: '', Solde: Number(R.opening) },
+            ...R.rows.map(l => ({ Date: fmtDate(isoDay(new Date(l.at))), 'Référence': l.ref || '', 'Opération': (l.reversal ? 'Annulation · ' : '') + (l.details || ''), Variation: Number(l.variation), Solde: l.solde, Agent: l.agent || '' })),
+            { Date: fmtDate(R.to), 'Référence': '', 'Opération': 'Solde final — ' + posLine(R.closing), Variation: '', Solde: Number(R.closing) }];
+          const wb = XL.utils.book_new(); const ws = XL.utils.json_to_sheet(rows); ws['!cols'] = [11, 13, 60, 13, 13, 18].map(w => ({ wch: w }));
+          XL.utils.book_append_sheet(wb, ws, 'Relevé');
+          XL.writeFile(wb, `Releve ${p.name} ${R.from} au ${R.to}.xlsx`.replace(/[\\/:*?"<>|]/g, '-'));
+        });
+        c.q('[data-x=print]').onclick = () => {
+          const co = company(), root = document.getElementById('print-root');
+          root.className = 'a4';
+          root.innerHTML = `<div class="releve"><img src="icons/logo.png" alt=""><h1>Relevé · ${esc(p.name)}</h1>
+            <p>${esc(co.name)} · du ${fmtDate(R.from)} au ${fmtDate(R.to)} · ${esc(R.scope === 'cartes' ? 'achats de cartes' : 'opérations financières')}</p>
+            ${c.q('#rel table').outerHTML}<p class="fin">${esc(posLine(R.closing))}</p></div>`;
+          let st = document.getElementById('pagestyle'); if (!st) { st = document.createElement('style'); st.id = 'pagestyle'; document.head.append(st); }
+          st.textContent = '@page { size: A4; margin: 14mm; }';
+          setTimeout(() => window.print(), 120);
+        };
+      },
+    });
+  }
+
+  // Liste de toutes les opérations partenaires (accessible aux agents pour leurs opérations de guichet).
+  async function vDossiers(m) {
+    const f = S.dsf || (S.dsf = { status: 'pending', type: '', q: '' });
+    const mgr = can('fournisseurs');
+    const types = D_TYPES.filter(t => mgr || AGENT_TYPES.includes(t[0]));
+    m.innerHTML = `
+      <div class="actions four">${types.filter(t => t[0] !== 'ouverture').map(t => `<button class="action" data-new="${t[0]}">${icon(t[2])}${esc(t[1])}</button>`).join('')}</div>
+      <div class="chips">${[['pending', 'En attente'], ['', 'Toutes'], ['echouee', 'Échouées'], ['annulee', 'Annulées']].map(([k, l]) => `<button class="chip ${f.status === k ? 'on' : ''}" data-st="${k}">${l}</button>`).join('')}</div>
+      <div class="filters"><select class="input" id="dtype">${options(types.map(t => [t[0], t[1]]), f.type, 'Tous les types')}</select>
+        <input class="input" id="dq" placeholder="Référence, client, bénéficiaire…" value="${esc(f.q)}"></div>
+      <div id="dres"><div class="spinner"></div></div>`;
+    m.querySelectorAll('[data-new]').forEach(b => b.onclick = () => sheetNewDossier(b.dataset.new, null, () => route()));
+    m.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { f.status = b.dataset.st; route(); });
+    const load = async () => {
+      const list = await rpc('list_dossiers', { status: f.status || null, type: f.type || null, q: f.q || null });
+      const box = m.querySelector('#dres'); if (!box) return;
+      box.innerHTML = list.length ? `<div class="list">${list.map(dossierRow).join('')}</div>` : '<div class="list"><div class="empty">Aucune opération.</div></div>';
+      bindDossiers(box, () => route());
+    };
+    m.querySelector('#dtype').onchange = e => { f.type = e.target.value; load(); };
+    m.querySelector('#dq').addEventListener('input', debounce(e => { f.q = e.target.value.trim(); load(); }, 250));
+    await load();
+  }
+
+  // Stock de cartes physiques.
+  async function vStock(m) {
+    const list = S._stock = await rpc('list_stock');
+    m.innerHTML = `
+      <div class="alert info"><span>Le stock augmente à chaque <b>réception</b> confirmée d’une commande de cartes, et diminue à chaque <b>vente</b> (produit « Vente … » dans Nouvelle opération).</span></div>
+      <div class="dtable scrollx"><table><thead><tr><th>Type de carte</th><th class="r">En stock</th><th class="r">À recevoir</th><th class="r">Vendues ce mois</th><th class="r">Dernier prix d’achat</th><th class="r">Prix de vente</th><th></th></tr></thead><tbody>
+        ${list.length ? list.map(t => `<tr style="cursor:default"><td><b>${esc(t.name)}</b> ${t.active ? '' : '<span class="tag">inactif</span>'}<div class="sub">${esc(t.bank || '')}</div></td>
+          <td class="r num ${t.stock < 0 ? 'neg' : ''}" style="font-weight:650">${t.stock}</td><td class="r num">${t.to_receive || ''}</td><td class="r num">${t.sold_month || ''}</td>
+          <td class="r num">${t.last_cost ? fmtN(t.last_cost) : ''}</td><td class="r num">${fmtN(t.sale_price)}</td>
+          <td class="r">${can('fournisseurs') ? `<button class="btn small" data-ct="${t.id}">Modifier</button>` : ''} ${can('ajust') ? `<button class="btn small" data-adj="${t.id}">Inventaire</button>` : ''}</td></tr>`).join('')
+          : '<tr><td colspan="7" class="empty">Aucun type de carte.</td></tr>'}</tbody></table></div>
+      ${can('fournisseurs') ? `<button class="btn block" id="newct" style="margin-top:12px">${icon('plus')} Nouveau type de carte</button>` : ''}`;
+    m.querySelectorAll('[data-ct]').forEach(b => b.onclick = () => sheetCardType(list.find(t => t.id === Number(b.dataset.ct))));
+    m.querySelectorAll('[data-adj]').forEach(b => b.onclick = () => {
+      const t = list.find(x => x.id === Number(b.dataset.adj));
+      sheet({
+        title: `Inventaire · ${t.name}`,
+        body: `<p class="small muted" style="margin-top:0">Stock actuel : <b>${t.stock}</b>. Saisissez la correction (+ ou −) avec son motif ; elle reste tracée.</p>
+          ${field('Correction (ex. 10 ou -2)', '<input class="input autofocus" name="qty" inputmode="numeric">')}
+          ${field('Motif', '<input class="input" name="note" placeholder="Stock de départ, inventaire du…, carte abîmée…">')}`,
+        foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
+        onMount(c) { c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+          await rpc('stock_adjust', { card_type_id: t.id, qty: parseInt(c.q('[name=qty]').value), note: c.q('[name=note]').value });
+          c.close(); toast('Stock corrigé.', 'ok'); route(); }); },
+      });
+    });
+    const nb = m.querySelector('#newct'); if (nb) nb.onclick = () => sheetCardType(null);
+  }
+  function sheetCardType(t) {
+    const x = t || { active: true, sale_price: 0 };
+    sheet({
+      title: t ? 'Modifier le type de carte' : 'Nouveau type de carte',
+      body: `${field('Nom', `<input class="input autofocus" name="name" value="${esc(x.name || '')}" placeholder="ex. Carte UBA AfricSika">`)}
+        <div class="grid2">${field('Banque', `<input class="input" name="bank" value="${esc(x.bank || '')}" style="text-transform:uppercase">`)}${field('Prix de vente au client', moneyInput('sale_price', `value="${fmtN(x.sale_price)}"`))}</div>
+        ${t ? `<label class="check"><input type="checkbox" name="active" ${x.active ? 'checked' : ''}> Actif</label>` : '<p class="small muted">Un produit « Vente … » est créé pour vendre ce type de carte depuis Nouvelle opération.</p>'}`,
+      foot: '<button class="btn primary" data-x="ok">Enregistrer</button>',
+      onMount(c) { c.q('[data-x=ok]').onclick = e => busy(e.currentTarget, async () => {
+        await rpc('save_card_type', { id: t ? t.id : null, name: c.q('[name=name]').value, bank: c.q('[name=bank]').value, sale_price: parseAmt(c.q('[name=sale_price]').value),
+          active: c.q('[name=active]') ? c.q('[name=active]').checked : true });
+        c.close(); toast('Enregistré.', 'ok'); await loadBoot(); route(); }); },
     });
   }
 
@@ -2065,7 +2603,9 @@
         ${item('#/clients', 'users', 'Clients', 'Fiches clients, cartes, historique')}
         ${isDir() ? item('#/doublons', 'users', 'Clients en double', 'Repérer et fusionner les fiches d’une même personne') : ''}
         ${item('#/commissions', 'card', 'Commissions à vérifier', 'Pointer les commissions avec le rapport du GTP')}
-        ${can('fournisseurs') ? item('#/fournisseurs', 'truck', 'Fournisseurs', 'Achats, paiements, ce que nous devons') : ''}
+        ${can('fournisseurs') ? item('#/fournisseurs', 'truck', 'Partenaires et fournisseurs', 'Position avec chaque partenaire, demandes, relevés') : ''}
+        ${item('#/dossiers', 'swap', 'Opérations partenaires', 'Recharges Ecobank / BNI, paiements, transferts Wave / OM / MTN')}
+        ${item('#/stock', 'tag', 'Stock de cartes', 'Cartes physiques en stock, à recevoir, vendues')}
         ${can('clotures') ? item('#/rapports', 'chart', 'Rapports', 'Par agence, par produit, par GTP, par agent, commissions par mois') : ''}
         ${!isDir() && can('produits') ? item('#/produits', 'tag', 'Produits de caisse', 'Ajouter ou modifier les produits et services') : ''}
         ${item('#/cartes', 'card', 'Cartes clients', 'Rechercher, corriger, ajouter')}
@@ -2739,7 +3279,9 @@
     cloture: { title: 'Clôture du soir', render: vCloture },
     tableau: { title: 'Tableau de bord', render: vTableau, live: true, mgr: true },
     clotures: { title: 'Clôtures', render: vClotures, live: true, mgr: true, perm: 'clotures' },
-    fournisseurs: { title: 'Fournisseurs', render: vFournisseurs, live: true, mgr: true, perm: 'fournisseurs' },
+    fournisseurs: { title: 'Partenaires et fournisseurs', render: vPartenaires, live: true, mgr: true, perm: 'fournisseurs' },
+    dossiers: { title: 'Opérations partenaires', render: vDossiers, live: true, need: 'can_caisse' },
+    stock: { title: 'Stock de cartes', render: vStock, live: true, mgr: true },
     plus: { title: 'Plus', render: vPlus, mgr: true },
     rapports: { title: 'Rapports', render: vRapports, mgr: true, perm: 'clotures' },
     cartes: { title: 'Cartes clients', render: vCartes, mgr: true },
@@ -2773,7 +3315,7 @@
     ajust: () => sheetAjust(),
     export: () => sheetExport(),
     reversement: () => sheetReversement(),
-    payerfour: () => sheetPayerFournisseur(),
+    payerfour: () => { location.hash = '#/fournisseurs'; },
     company: () => sheetCompany(),
     me: () => sheetMe(),
     newcard: () => sheetCard(null, {}),
